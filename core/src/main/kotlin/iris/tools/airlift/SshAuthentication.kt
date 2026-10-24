@@ -18,7 +18,7 @@ object SshAuthentication {
 
     /** Only sshpass receives the prompted password; it is not exported to the parent shell. */
     @Synchronized fun configure(builder: ProcessBuilder): ProcessBuilder {
-        if (builder.command().firstOrNull() == "sshpass" && !builder.environment().containsKey("SSHPASS")) {
+        if (builder.command().firstOrNull() == "sshpass") {
             promptedPassword?.let { builder.environment()["SSHPASS"] = String(it) }
         }
         return builder

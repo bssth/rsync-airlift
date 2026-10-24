@@ -1,3 +1,6 @@
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+
 plugins {
     kotlin("jvm")
     application
@@ -41,13 +44,34 @@ val executableJar = tasks.named<Jar>("jar") {
     }
 }
 
-val jarBundle = tasks.register<Sync>("jarBundle") {
+val jarBundle = tasks.register("jarBundle") {
     group = "distribution"
     description = "Assemble separate monitor/core JARs and manifest-linked lib/ dependencies."
-    into(layout.buildDirectory.dir("jar-bundle"))
-    from(executableJar)
-    from(coreJar)
-    into("lib") { from(externalLibraries) }
+    dependsOn(executableJar, coreJar)
+    inputs.files(executableJar, coreJar, externalLibraries)
+    val bundleDirectory = layout.buildDirectory.dir("jar-bundle")
+    outputs.dir(bundleDirectory)
+    doLast {
+        val root = bundleDirectory.get().asFile.toPath().toAbsolutePath().normalize()
+        val sources = linkedMapOf(
+            executableJar.get().archiveFileName.get() to executableJar.get().archiveFile.get().asFile,
+            coreJar.get().archiveFileName.get() to coreJar.get().archiveFile.get().asFile,
+        )
+        externalLibraries.get().forEach { sources["lib/${it.name}"] = it }
+        val destinations = sources.map { (name, source) -> root.resolve(name) to source.toPath() }
+        // Gradle skips the whole task when possible; on changes, retain identical files too.
+        destinations.forEach { (target, source) ->
+            Files.createDirectories(target.parent)
+            if (!Files.exists(target) || Files.mismatch(source, target) != -1L) {
+                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
+            }
+        }
+        val expected = destinations.map { it.first }.toSet()
+        Files.walk(root).use { paths ->
+            paths.filter { Files.isRegularFile(it) && it !in expected }
+                .forEach { Files.delete(it) }
+        }
+    }
 }
 
 val jarBundleZip = tasks.register<Zip>("jarBundleZip") {

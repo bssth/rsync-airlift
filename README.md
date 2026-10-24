@@ -263,7 +263,9 @@ Authentication is prepared once before opening the monitor:
 1. If `SSHPASS` exists in the environment, use `sshpass -e` with `BatchMode=no`.
 2. Otherwise try SSH keys or `ssh-agent` with `BatchMode=yes`.
 3. If authentication is denied and a console is available, ask for a password
-   once, without echo. Reuse it through the environment of `sshpass` processes
+   once, without echo, even if the rejected password came from `SSHPASS`.
+   The entered password overrides inherited `SSHPASS` for this run.
+   Reuse it through the environment of `sshpass` processes
    for discovery and worker connections. A rejected password ends startup.
 
 The prompted password is not written to files, command arguments, or logs, and

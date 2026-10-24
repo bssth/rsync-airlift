@@ -40,8 +40,11 @@ internal fun checkSshConnection(
         if (failure.exitCode == 0) return
     }
     val passwordRejected = Regex("Permission denied", RegexOption.IGNORE_CASE).containsMatchIn(failure.output)
-    if (!passwordAvailable() && passwordRejected) {
-        check(interactive) { "SSH key authentication failed. Configure a key/ssh-agent or export SSHPASS for a headless run. ${failure.output}" }
+    if (passwordRejected) {
+        check(interactive) {
+            if (passwordAvailable()) "SSH password authentication failed. Run in an interactive terminal to enter a replacement password, or correct SSHPASS. ${failure.output}"
+            else "SSH key authentication failed. Configure a key/ssh-agent or export SSHPASS for a headless run. ${failure.output}"
+        }
         val password = readPassword("${config.host}'s SSH password: ") ?: error("SSH password input cancelled or unavailable")
         try { installPassword(password) } finally { password.fill('\u0000') }
         val retry = execute(strict(), false)

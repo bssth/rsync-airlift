@@ -39,11 +39,30 @@ class PasswordPromptTest {
         assertEquals(2, calls)
     }
 
-    @Test fun `existing SSHPASS and network failures never prompt`() {
-        for ((available, result) in listOf(true to denied, false to SshCheckResult(255, "Connection refused"))) {
+    @Test fun `rejected existing password asks once and replaces inherited password`() {
+        var calls = 0
+        var prompts = 0
+        try {
+            checkSshConnection(config, true, passwordAvailable = { true },
+                readPassword = { prompts++; "replacement".toCharArray() }) { command, _ ->
+                val builder = ProcessBuilder(command)
+                builder.environment()["SSHPASS"] = "other server password"
+                SshAuthentication.configure(builder)
+                if (calls++ == 0) denied else {
+                    assertEquals("replacement", builder.environment()["SSHPASS"])
+                    SshCheckResult(0, "")
+                }
+            }
+            assertEquals(1, prompts)
+            assertEquals(2, calls)
+        } finally { SshAuthentication.clearPassword() }
+    }
+
+    @Test fun `network failures never prompt`() {
+        for (available in listOf(true, false)) {
             assertFailsWith<IllegalStateException> {
                 checkSshConnection(config, true, authenticate = { it }, passwordAvailable = { available },
-                    readPassword = { fail("Unexpected password prompt") }) { _, _ -> result }
+                    readPassword = { fail("Unexpected password prompt") }) { _, _ -> SshCheckResult(255, "Connection refused") }
             }
         }
     }
