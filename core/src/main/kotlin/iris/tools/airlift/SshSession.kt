@@ -59,7 +59,9 @@ private class SshSession(private val config: AirliftConfig) : TransferSession {
         val local = localRoot.toAbsolutePath().toString().trimEnd('/', '\\') + "/"
         val source = if (config.direction == TransferDirection.DOWNLOAD) remote else local
         val destination = if (config.direction == TransferDirection.DOWNLOAD) local else remote
-        val command = RsyncCommand.build(config, transport, source, destination)
+        val entries = task.entries
+        val command = RsyncCommand.build(config, transport, source, destination,
+            recursive = entries.any { it == "." || it.endsWith('/') })
         Files.newBufferedWriter(logFile).use { log ->
             val process = launch(command)
             val inputFailure = java.util.concurrent.atomic.AtomicReference<Exception?>()
@@ -68,7 +70,7 @@ private class SshSession(private val config: AirliftConfig) : TransferSession {
             val writer = kotlin.concurrent.thread(name = "airlift-rsync-list", isDaemon = true) {
                 try {
                     process.outputStream.use { output ->
-                        (task.files.ifEmpty { listOf(task.path) }).forEach { output.write((it + '\u0000').toByteArray(Charsets.UTF_8)) }
+                        (entries.ifEmpty { task.files.ifEmpty { listOf(task.path) } }).forEach { output.write((it + '\u0000').toByteArray(Charsets.UTF_8)) }
                     }
                 } catch (e: Exception) { inputFailure.set(e) }
             }

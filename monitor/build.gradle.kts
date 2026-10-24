@@ -26,25 +26,27 @@ tasks.named<JavaExec>("run") { standardInput = System.`in` }
 val runtimeLibraries = configurations.runtimeClasspath
 val coreJar = project(":core").tasks.named<Jar>("jar")
 val externalLibraries = runtimeLibraries.map { libraries -> libraries.filter { it != coreJar.get().archiveFile.get().asFile } }
+val manifestClasspath = externalLibraries.map { libraries ->
+    (listOf(coreJar.get().archiveFileName.get()) + libraries.sortedBy { it.name }.map { "lib/${it.name}" }).joinToString(" ")
+}
 val executableJar = tasks.named<Jar>("jar") {
-    // Ship application code (including core) in one replaceable JAR; third-party libs stay external.
-    from(project(":core").extensions.getByType<SourceSetContainer>()["main"].output)
+    // Keep monitor and core separate; resolve both core and third-party libs via the manifest.
     archiveFileName.set("rsync-airlift.jar")
-    inputs.files(runtimeLibraries).withPropertyName("manifestClasspath")
+    inputs.property("manifestClasspath", manifestClasspath)
     doFirst {
         manifest.attributes(
             "Main-Class" to application.mainClass.get(),
-            "Class-Path" to externalLibraries.get().sortedBy { it.name }
-                .joinToString(" ") { "lib/${it.name}" },
+            "Class-Path" to manifestClasspath.get(),
         )
     }
 }
 
 val jarBundle = tasks.register<Sync>("jarBundle") {
     group = "distribution"
-    description = "Assemble executable rsync-airlift.jar with manifest-linked lib/ dependencies."
+    description = "Assemble separate monitor/core JARs and manifest-linked lib/ dependencies."
     into(layout.buildDirectory.dir("jar-bundle"))
     from(executableJar)
+    from(coreJar)
     into("lib") { from(externalLibraries) }
 }
 

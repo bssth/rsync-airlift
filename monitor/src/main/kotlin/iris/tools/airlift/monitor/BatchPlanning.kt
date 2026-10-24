@@ -14,7 +14,9 @@ internal fun batchSmallFiles(tasks: List<TransferTask>, minBytes: Long = 5L * 10
             pending.first().id, pending.first().sourceRoot, pending.map { it.path }))
         pending.clear(); bytes = 0
     }
-    for (task in tasks) {
+    val tail = tasks.indexOfFirst { it.size?.let { size -> size < minBytes } == true }.let { if (it < 0) tasks.size else it }
+    val ordered = tasks.take(tail) + tasks.drop(tail).sortedBy { it.path }
+    for (task in ordered) {
         if (task.size == null || task.files.isNotEmpty()) {
             flush(); result.add(task); continue
         }

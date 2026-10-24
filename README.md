@@ -25,7 +25,7 @@ Parallel rsync is an established approach. Airlift brings visibility, live contr
 and file scheduling together in one terminal workflow.
 
 - **See the whole operation.** An `htop`-inspired dashboard shows each worker's
-  file progress, size, speed, and ETA alongside the queue and errors. Overall
+  job progress, size, speed, and ETA alongside the queue and errors. Overall
   statistics distinguish matched data from newly transferred data, with elapsed
   time and an average processing rate at completion. Select a worker to inspect
   its current file and error details.
@@ -105,7 +105,7 @@ The project has two Kotlin/JVM modules:
 - **`core`** accepts a prepared list of files, owns the queue, and manages worker
   connections. Applications can supply their own selection and ordering.
 - **`monitor`** provides the command-line launcher, file discovery, size collection,
-  largest-first scheduling, an attachable monitoring service, and the Lanterna TUI.
+  size-based scheduling and batching, an attachable monitoring service, and the Lanterna TUI.
 
 This separation keeps the library useful beyond the migration that inspired it.
 The input can be database files, archives, media, or any other list of files.
@@ -165,93 +165,363 @@ to understand, and reduce the time spent waiting for synchronization to finish.
 
 *Built with Kotlin. Powered by rsync. Inspired by a real production migration.*
 
-## Build
+## Build and deployment
 
-```text
-./gradlew build
-./gradlew :monitor:installDist
-./monitor/build/install/rsync-airlift-monitor/bin/rsync-airlift-monitor --demo
+Requires **Java 21**. The project uses Kotlin **2.1.21** and the Gradle wrapper.
+Build the two component JARs and collect their dependencies without an archive:
+
+```sh
+./gradlew :core:test :monitor:test :monitor:jarBundle
 ```
 
-Building and unit tests work on Windows. Actual transfers target a POSIX environment
-(Linux or WSL with a Linux JDK), with OpenSSH and rsync installed on both hosts.
-Provision known_hosts before starting; host key verification is mandatory.
-With `SSHPASS` present in the environment, initial SSH connections use `sshpass -e`
-and `BatchMode=no` (install sshpass on the dispatcher machine). Otherwise they
-use keys/ssh-agent and `BatchMode=yes`. If key authentication fails and an
-interactive console is available, Airlift asks for the SSH password once, without
-echo, before file discovery and opening the monitor. This fallback also requires
-sshpass. The entered password is reused for discovery and worker connections;
-it is not written to disk, logs, or command arguments, or exported to your shell.
-A rejected password ends startup without another prompt. For a headless launch,
-configure keys/ssh-agent or export `SSHPASS` in advance.
-The password is supplied to sshpass through its process environment. This applies to discovery
-and worker ControlMaster authentication; multiplexed operations use the existing master.
+On Windows, use `gradlew.bat`. Deploy the contents of `monitor/build/jar-bundle/`:
 
-## Confirming a transfer and Midnight Commander
+```text
+rsync-airlift.jar          # executable monitor/CLI
+rsync-airlift-core.jar     # core library; no standalone main
+lib/                      # Kotlin, Lanterna, JLine and other runtime dependencies
+```
 
-Before a real transfer, the launcher displays `From` and `To` and asks for
-confirmation. Only `y` or `yes` starts synchronization; Enter, `no`, or EOF cancels.
-Confirmation happens before SSH authentication, discovery and worker startup.
-`--swing` uses a graphical confirmation dialog. Unattended runs must pass `--yes`;
-this skips only the direction confirmation, not SSH host-key verification or authentication.
-The core library, demo and attach modes do not ask for transfer confirmation.
+The monitor manifest links the adjacent core JAR and the JARs in `lib/` using a
+relative `Class-Path`. Keep this layout; no Gradle or manual classpath is needed
+on the destination machine. Rebuild with `:monitor:jarBundle` without `clean`:
+unchanged tasks are `UP-TO-DATE`. Deploy changed component JARs; update `lib/`
+when external dependencies change.
 
-Midnight Commander shell-link paths are recognized automatically:
+Other build targets:
+
+| Target | Output |
+| --- | --- |
+| `:core:jar` | `core/build/libs/rsync-airlift-core.jar` |
+| `:monitor:jar` | `monitor/build/libs/rsync-airlift.jar` |
+| `:monitor:jarBundleZip` | Portable ZIP under `monitor/build/distributions/` |
+| `:monitor:installDist` | Launch scripts and libraries under `monitor/build/install/rsync-airlift-monitor/` |
+| `build` | Tests and distributions, including archives |
+
+Builds, tests and the terminal/demo UI work on Windows. Real transfers target
+**Linux or WSL with a Linux JDK**, with OpenSSH and rsync on both machines.
+Remote discovery also requires a POSIX shell and GNU `find`.
+Password authentication requires `sshpass` on the machine running Airlift.
+
+## Quick start
+
+Run these commands from the deployed bundle directory:
+
+```sh
+java -jar rsync-airlift.jar --help
+java -jar rsync-airlift.jar --demo
+
+# Download and open the terminal monitor.
+java -jar rsync-airlift.jar --workers 8 --rsync "-av --partial" \
+  user@source-server:/srv/source/ /srv/destination/
+
+# Upload by swapping the endpoints.
+java -jar rsync-airlift.jar --workers 8 --rsync "-av --partial" \
+  /srv/source/ user@destination-server:/srv/destination/
+```
+
+The last positional argument is always the destination:
+`[options] SOURCE [SOURCE ...] DESTINATION`. Sources must all be local for upload,
+or remote on the same SSH host for download. Local-to-local, remote-to-remote,
+and rsync-daemon endpoints are not supported. Remote paths must be absolute;
+bracket IPv6 addresses, for example `user@[2001:db8::1]:/srv/source/`.
+
+Real transfers display **FROM** and **TO** before SSH authentication, discovery
+or worker startup. Only `y` or `yes` confirms; Enter or EOF cancels.
+`--yes` explicitly skips this confirmation for automation. It does not bypass
+SSH authentication or host-key verification. The core library, demo and attach
+modes do not ask for transfer confirmation.
+
+### Options and modes
+
+| Argument | Behavior/default |
+| --- | --- |
+| `--workers N` | Initial target concurrency; 16 for real transfers, 4 for demo |
+| `--rsync "OPTIONS"` | Copy options passed to rsync; no archive/partial/bandwidth policy is injected |
+| `--batch-min-size SIZE` | Minimum accumulated job size; `5MiB` |
+| `--files FILE` | UTF-8 relative file list; one path per line |
+| `--null` | Read the list as NUL-separated paths instead |
+| `--port N` | SSH port; 22 |
+| `--identity FILE` | SSH private-key path |
+| `--endpoint FILE` | Monitor connection file; `airlift-monitor.connection` in the working directory for real runs |
+| `--yes` | Skip transfer-direction confirmation |
+| `--run` | Transfer and open TUI; implied by positional endpoints |
+| `--serve` | Transfer without opening TUI; same CLI confirmation/authentication rules apply |
+| `--attach FILE` | Open TUI for an existing dispatcher; accepts only optional `--swing` |
+| `--demo` / `--serve-demo` | Simulate transfers with/without TUI; no SSH or real copying |
+| `--swing` | Explicit graphical terminal window; otherwise use the real terminal |
+| `--mc` | Optional compatibility flag; MC path recognition is automatic |
+
+Value options accept `--name VALUE` or `--name=VALUE`. `--` ends option parsing.
+An empty invocation prints help and starts nothing. Demo uses 48 simulated files,
+includes one failure, and gives each run a temporary endpoint by default.
+
+## SSH authentication
+
+Authentication is prepared once before opening the monitor:
+
+1. If `SSHPASS` exists in the environment, use `sshpass -e` with `BatchMode=no`.
+2. Otherwise try SSH keys or `ssh-agent` with `BatchMode=yes`.
+3. If authentication is denied and a console is available, ask for a password
+   once, without echo. Reuse it through the environment of `sshpass` processes
+   for discovery and worker connections. A rejected password ends startup.
+
+The prompted password is not written to files, command arguments, or logs, and
+is not exported to the parent shell. Noninteractive launches need working keys,
+an agent, or `SSHPASS` supplied in advance. `--swing` does not provide a separate
+graphical password prompt: the fallback password input still requires a console.
+
+Unknown host keys can be reviewed and accepted through OpenSSH's interactive
+fingerprint prompt. Changed host keys remain an error; Airlift does not silently
+replace them. For a headless run, establish the trusted host key beforehand.
+
+Each worker owns an independent SSH ControlMaster and reuses it across jobs.
+Initial connection failures appear in the worker/error views. Failed connections
+are not automatically reconnected; rsync attempts use `AirliftConfig.maxAttempts`
+(default 1). The CLI does not expose a retry-count option.
+
+## File selection and destination paths
+
+Without `--files`, the launcher discovers regular files and symlinks under the
+source directory, or selects a single file or mask. It does not follow directory
+symlinks during discovery. It collects source sizes before starting workers;
+those sizes describe the initial inventory, not an atomic filesystem snapshot.
+
+```sh
+# A quoted mask is expanded by Airlift.
+java -jar rsync-airlift.jar --rsync "-av --partial" \
+  'user@host:/srv/source/*.bin' /srv/destination/
+
+# A shell-expanded local list is also supported.
+java -jar rsync-airlift.jar --rsync "-av --partial" \
+  /srv/source/*.bin user@host:/srv/destination/
+```
+
+`*` and `?` match within one path component, `**` crosses directories, and bracket
+classes such as `[abc]` are supported. Quote masks when Airlift should expand them.
+
+With `--files` and no mask, only the listed paths are selected. With a mask and
+`--files`, the two selections are combined without duplicates. List paths are
+relative to the source directory, or the directory before the first wildcard.
+Blank entries are ignored; missing listed files abort preparation.
+
+Destination mapping:
+
+| Source/selection | Result under `/backup/` |
+| --- | --- |
+| Single directory root `/data/`, list entry `one/a.bin` | `/backup/one/a.bin` |
+| Single file `/data/one/a.bin` | `/backup/a.bin` |
+| Multiple directories `/data/one` and `/data/two` | `/backup/one/...` and `/backup/two/...` |
+| Multiple directories `/data/one/` and `/data/two/` | Their contents directly under `/backup/` |
+
+A single directory is treated as a root and copies its contents, with or without
+a trailing slash. The directory-name distinction in the table applies to multiple
+sources. For multiple roots, `--files` entries are searched relative to each root
+and must exist in at least one. Repeated source files are deduplicated; different
+sources mapping to the same destination path cause a preparation error.
+
+## Scheduling, batching and directory collapse
+
+The launcher starts with descending file sizes (ties by path). When it reaches
+files smaller than `--batch-min-size`, it sorts the remaining tail by path.
+It fills jobs until their accumulated size reaches the threshold or more, the
+queue ends, or the source root changes. A large file naturally fills a job on its
+own in the descending-size prefix. The final job may be smaller; there is no
+file-count limit, so zero-length files can share one invocation.
+
+The default is **5MiB = 5,242,880 bytes**. Units are case-insensitive: decimal
+`KB`/`MB`/`GB`, binary `KiB`/`MiB`/`GiB`, or an integer byte count without a suffix.
+For example, `--batch-min-size 5MB` means 5,000,000 bytes.
+
+Each job uses one rsync invocation, fed by NUL-separated stdin with
+`--from0 --files-from=-`; no temporary file list is needed. Paths containing
+spaces, newlines or leading dashes are not interpolated into shell commands.
+
+If a job owns all files below a directory, its list can be shortened to a recursive
+directory entry. Parents may be collapsed too, and a job can mix directories with
+individual files. For example, 17,000 files may become one `.` entry **if they all
+belong to that job**. Jobs are not enlarged just to achieve directory collapse.
+
+Coverage is checked against the complete **initial** inventory, including files
+not selected by a mask/list. Files assigned to another job prevent collapse.
+Unselected empty directories and special filesystem entries also block parent
+collapse. Airlift performs no per-job directory rescan or additional SSH check;
+rsync handles the subsequent traversal. Collapsed jobs add `--recursive`.
+
+Collapse is disabled for `--delete*`, `--remove-source-files`, `--copy-links`,
+`--copy-dirlinks`, `--keep-dirlinks`, their recognized short link-following flags,
+and `--no-recursive`. Original file names and sizes remain in the job ledger.
+New files found by rsync in a collapsed directory can be copied; files removed
+since startup may no longer be copied. Displayed counts/totals describe the
+initial selection. Keep directory membership stable when that exact selection
+must be preserved.
+
+`Done` counts files and advances when a whole job succeeds. A failed batch has
+unconfirmed individual outcomes: all its files are conservatively counted as
+failed even if some were copied. A retry reruns the whole batch; rsync reconciles
+the destination according to the supplied options. Pause and concurrency reduction
+take effect between jobs, without interrupting active transfers.
+
+## Rsync options
+
+```sh
+java -jar rsync-airlift.jar --workers 4 \
+  --rsync "-avH --partial --inplace --bwlimit=90000" \
+  user@host:/srv/source/ /srv/destination/
+```
+
+The string is tokenized with single/double quoting and escapes, not evaluated by
+a shell. No variable, command-substitution or wildcard expansion takes place in
+`--rsync`. Supply the copy policy yourself: Airlift does not inject `-a`,
+`--partial`, `--partial-dir`, `--inplace`, or bandwidth limits.
+
+Airlift appends its relative-path, file-list, SSH transport and telemetry arguments,
+including a filename output format. `-e`/`--rsh`, `--files-from` and an option
+terminator inside `--rsync` are reserved. Use Airlift's `--port`, `--identity`, and
+`--files` for those purposes. Other options are forwarded, not comprehensively validated.
+
+`--bwlimit` is **per rsync process**, not global. `-H` can preserve hard links
+within a job, but not across separate jobs. Symlink copying follows the options
+you provide; discovery itself does not follow directory symlinks.
+`--inplace` updates the destination directly and conflicts with `--partial-dir`.
+
+## Terminal monitor
+
+The default UI uses a real terminal, including on Windows. Use `--swing` explicitly
+for a graphical terminal window. For SSH, allocate a PTY with `ssh -t`; no X11
+forwarding is needed. Prefer `java -jar` or the installed launcher over Gradle
+`:monitor:run`, which can redirect or interleave terminal I/O.
+
+The monitor refreshes about every 200 ms and needs at least **64 × 16** characters.
+Worker panels fill vertically before adding columns, are at most **88** characters
+wide, and page when necessary. The overall bar has at most **100** interior cells.
+
+| Input | Action |
+| --- | --- |
+| `1` / `2` / `3`, Tab | Workers / queue / errors |
+| Up/Down, PgUp/PgDn, Home/End | Select/navigate entries |
+| Left/Right | Move between worker columns |
+| F2, Enter | Toggle details; displayed when height is at least 22 |
+| `P` | Pause/resume assignment of new jobs |
+| `+` / `=` | Increase concurrency by one, or cancel one pending retirement |
+| `-` | First dismiss one FAILED worker row; otherwise decrease concurrency, minimum one |
+| Click worker/list row or tab | Select an entry or switch view |
+| Mouse wheel over the list | Move selection by three entries |
+| `Q` | Detach the panel; transfers and monitor service continue |
+
+Dismissed FAILED rows are hidden in that panel session; their errors remain in
+Errors. They can reappear after reattaching. STOPPED workers are hidden. A subdued
+orange background on the last live rows indicates how many retirements are pending;
+the first workers to finish actually retire. During a run, `Workers` shows the live
+count; after completion it shows the last configured target.
+
+Mouse reporting can prevent ordinary text selection. In terminals supporting it,
+hold Shift while selecting to bypass application mouse capture. Fonts, palette,
+zoom and padding belong to the terminal application. In Swing only, use
+`AIRLIFT_FONT` and `AIRLIFT_FONT_SIZE` (12–40, default 18); the default font prefers
+Consolas and falls back to installed monospace fonts.
+
+### Progress and details
+
+Worker size, rate and percentage refer to the whole job. While a running job has
+zero reported bytes and no positive rate, a quiet `computing checksums` or
+`checksums` label replaces the empty bar. This is a preparation indicator, not
+confirmation of rsync's precise internal phase.
+
+Details show the filename reported by rsync, job size and state, matched/new data,
+speed and errors. Multi-file jobs also show the file count, current file's index
+in the submitted list, and rsync's `sent` counter. The index is **not** a processed
+count: rsync can reorder and skip files. `sent` counts transferred files, excluding
+quick-check skips. Successful batches display `Processed N/N` instead of the last
+reported index. Single-file details include the attempt number.
+
+Overall statistics:
+
+- **Processed** is logical work, not network traffic. The displayed byte count
+  includes successful job sizes and reported progress of running jobs.
+- **Matched** includes rsync's matched blocks and successfully skipped/inferred
+  bytes that did not need to be sent. **New** is rsync's literal-data counter.
+  These are not compressed wire-byte measurements or proof of a checksum audit.
+  Filters and dry runs can also avoid transfer; interpret the figures according
+  to your rsync options.
+- Percentages beside Matched/New use the already processed byte count, not the
+  full dataset. Their sum may be below 100% while final statistics are pending.
+- The overall bar counts successful and finally failed jobs at full weight, so
+  completed work with errors can still reach 100%. Colors: cyan matched, green
+  new, red failed, yellow processed work awaiting a final breakdown. Without
+  usable byte totals, progress falls back to job weights.
+- Exact Matched/New statistics arrive at the end of each rsync attempt. Completed
+  worker bars split by those statistics; live bars show ordinary logical progress.
+- Live speed uses fresh rates; readings expire after three seconds. The previous
+  complete aggregate is retained for up to three seconds during job handovers.
+  ETA uses available rates when sizes are known, the queue is not paused, and no
+  files have failed. Otherwise ETA is unknown.
+- At completion, overall speed is recorded processed bytes divided by dispatcher
+  elapsed time, and ETA disappears. A successful worker's final speed is its job
+  size divided by processing time, including retries/backoff but excluding queue
+  wait and initial SSH connection. Final worker ETA is blank.
+
+Progress output is parsed on both CR and LF. Traditional rsync speed units use
+1024 scaling. For newer progress records with a byte-count `B` suffix and
+configurable scaling, byte progress is retained but live rate is left unknown.
+
+## Background dispatch and attaching
+
+`--serve` runs the dispatcher without a panel. It still belongs to the monitor
+CLI, so unattended use requires `--yes` plus noninteractive SSH credentials:
+
+```sh
+nohup java -jar rsync-airlift.jar --serve --yes --workers 8 \
+  --rsync "-av --partial" --endpoint "$HOME/airlift.connection" \
+  user@host:/srv/source/ /srv/destination/ > airlift.log 2>&1 < /dev/null &
+
+# In another terminal on the dispatcher machine:
+java -jar rsync-airlift.jar --attach "$HOME/airlift.connection"
+```
+
+For an interactive launch that should survive SSH logout, use tmux or a service.
+`Q` alone does not protect the hosting process from logout. The server remains
+alive after transfer completion so results can be inspected; **Ctrl+C stops it**.
+The CLI is not currently a one-shot command that exits at the end of copying.
+
+The monitor service binds to **127.0.0.1** on an ephemeral port. Its connection
+file contains the port, token and endpoint descriptions, with owner-only permissions
+on POSIX. Treat it as a credential and keep it out of Git. To attach remotely,
+run the attach command through SSH on the dispatcher host, with a PTY.
+
+Connection files are never overwritten. If one exists, attach to that dispatcher
+or choose a different `--endpoint`. After an unclean termination, remove a stale
+file only after confirming that its dispatcher is no longer running. Normal
+shutdown removes the connection file. The protocol is version **3**; update
+dispatcher and attached monitors together when the protocol changes.
+
+## Midnight Commander
+
+MC shell-link paths are recognized automatically:
 `/sh://user@host/home/data` becomes `user@host:/home/data`.
-No `--mc` flag is needed; it is accepted as an optional compatibility flag.
-Paths containing spaces are retained. One endpoint must still be local; remote-to-remote
-copies are not supported. Use `--port` for a nonstandard SSH port rather than embedding
-a port in the MC shell-link host.
+`--mc` is accepted but not required. Use `--port` for a nonstandard SSH port rather
+than embedding it in the MC shell-link host.
 
-Add an entry to `~/.config/mc/menu` (adjust the absolute JAR path):
+Add to `~/.config/mc/menu`, adjusting the absolute JAR path:
 
 ```text
 A Rsync Airlift - synchronize panels
     java -jar /opt/rsync-airlift/rsync-airlift.jar --rsync "-av --partial" %d %D
 ```
 
-`%d` is the **active** panel directory (source); `%D` is the **other** panel
-directory (destination), not fixed left/right positions. MC expands the macros
-in its user-menu command. Review the displayed paths before confirming the copy.
-See the [MC manual](https://source.midnight-commander.org/man/mc.html) for user menus
-and macro substitution. Airlift makes its own SSH connections; it does not reuse MC's
-authenticated shell link. Its normal key, `SSHPASS`, or interactive password flow applies.
+`%d` is the **active panel** directory (source); `%D` is the **other panel** directory
+(destination), not fixed left/right positions. Review FROM/TO before confirming.
+See the [MC manual](https://source.midnight-commander.org/man/mc.html) for macro
+substitution and user menus. Airlift makes its own SSH connections and does not
+reuse MC's authenticated shell link. Ctrl+O hides/restores MC's panels to inspect
+terminal output.
 
-## Executable JAR bundle
+## Core library
 
-```text
-./gradlew :monitor:jarBundleZip
-```
-
-The regular `build` also produces
-`monitor/build/distributions/rsync-airlift-0.1.0-SNAPSHOT-jar.zip`.
-Extract the entire ZIP on the target machine, keeping this layout:
-
-```text
-rsync-airlift.jar
-lib/
-  ...runtime dependencies...
-```
-
-With Java 21 installed, run:
-
-```sh
-java -jar rsync-airlift.jar --help
-java -jar rsync-airlift.jar --demo
-java -jar rsync-airlift.jar --rsync "-av --partial" user@host:/source/ /destination/
-```
-
-The JAR manifest supplies `Main-Class` and a relative `Class-Path` pointing into
-`lib/`. Copy the JAR and the entire `lib/` together; no Gradle or manually set
-classpath is needed on the target. Java, rsync and SSH are external prerequisites.
-The unpacked bundle is also available in `monitor/build/jar-bundle/`.
-Application code, including core, is inside `rsync-airlift.jar`; third-party
-dependencies remain in `lib/`. To rebuild only the application JAR without any
-archives, run `./gradlew :monitor:jar` and deploy `monitor/build/libs/rsync-airlift.jar`.
-An older `lib/core-*.jar` can remain in place; the manifest no longer references it.
-
-## Library usage
+`rsync-airlift-core.jar` is a library, without TUI dependencies or a standalone
+entry point. It accepts prepared jobs and preserves their order; it does not
+discover files, sort, create batches automatically, or ask confirmation/password
+questions. The monitor CLI provides those preparation and interactive features.
 
 ```kotlin
 import iris.tools.airlift.*
@@ -261,253 +531,58 @@ val config = AirliftConfig(
     host = "user@source-server",
     remoteRoot = "/srv/source",
     localRoot = Path.of("/srv/destination"),
-    workers = 16,
+    workers = 8,
     maxAttempts = 2,
+    rsyncOptions = "-av --partial",
 )
-val files = listOf(
-    TransferTask("reports/report.csv", size = 123456),
-    TransferTask("images/photo.jpg"),
+val jobs = listOf(
+    TransferTask("large.bin", size = 100_000_000),
+    TransferTask(
+        path = "small/a.txt",
+        size = 2_000,
+        files = listOf("small/a.txt", "small/b.txt"),
+    ),
 )
 
-AirliftDispatcher(config, files).use { airlift ->
-    val completion = airlift.start()
-    // Another thread can poll airlift.snapshot(), pause(), resume(),
-    // or setWorkerCount(8). Closing the dispatcher cancels transfers.
-    val result = completion.get()
+AirliftDispatcher(config, jobs).use { dispatcher ->
+    val result = dispatcher.start().get()
     check(result.failed == 0 && !result.cancelled)
+    // Another thread may poll snapshot(), pause(), resume(), or setWorkerCount(4).
 }
 ```
 
-The direction defaults to DOWNLOAD; UPLOAD reverses the source/destination roles.
-Task paths are relative POSIX file paths under the configured roots. Directory
-hierarchy is preserved. Files with spaces, newlines and leading dashes are passed
-using a NUL-delimited file list, not shell interpolation. Task IDs must be unique;
-callers must avoid overlapping destinations, including aliases through symlinks.
-The library does not scan directories, filter extensions, sort, or recursively
-discover files. Symlinks use rsync archive semantics (copy the link itself).
-Hard-link relationships across separate rsync jobs are not preserved; files in the
-same batch can retain them when the caller supplies `-H`.
+Direction defaults to DOWNLOAD; UPLOAD reverses the configured roots. `path` and
+`files` are relative POSIX paths without traversal; batch `size` is the total
+source size. An empty `files` list means one file at `path`. Task IDs must be
+unique (default: `path`); callers must avoid overlapping destinations, including
+symlink aliases. `sourceRoot` can override a job's source root. `entries` can
+provide a shortened file/directory list while `files` retains the accounting list;
+the caller is responsible for establishing full directory coverage.
 
-Files are assigned in input order; completion order depends on transfer times.
-Each worker owns one ControlMaster. Lowering concurrency lets current files
-finish before retiring workers; pausing stops only new task assignment.
-Connection failures are exposed in worker state; failed rsync attempts are
-retried up to maxAttempts. SSH reconnection is not automatic in this version.
-A --bwlimit supplied inside --rsync applies per rsync process, not globally.
+Closing the dispatcher cancels pending work and terminates its child processes.
+To integrate a monitor, wrap it in `DispatcherMonitorSource`, expose
+`MonitorServer(source, endpoint)`, and/or run `AirliftMonitor(source).run()`.
+The library adapters do not own the dispatcher; close their resources separately.
 
-## Progress, logs and resuming
+## Logs, resuming and consistency
 
-Snapshots contain immutable task/worker records, attempts, errors, log paths and
-parsed progress. Progress is logical rsync progress, not wire bytes. The monitor
-aggregates fresh logical speeds and estimates overall ETA only when every file
-size is known, every active file has a fresh rate, and there are no failed files.
-Stale rates expire after three seconds. Missing sizes/rates display as unknown.
-Progress records are split on both CR and LF. Traditional rsync speed units use
-1024 scaling; newer B-suffixed output retains logical bytes and ETA but leaves
-rate unknown rather than guessing configurable unit scaling.
-See [rsync progress implementation](https://github.com/RsyncProject/rsync/blob/v3.2.7/progress.c).
+Each run creates a unique directory under `AirliftConfig.logDirectory` (CLI default:
+`airlift-logs/` in the working directory). Each job attempt has one raw rsync log.
+Logs are available on disk; raw output and log paths are not shown in the panel.
 
-Every run gets its own directory under logDirectory; each task attempt has a
-separate raw rsync log. Partial-file handling and destination replacement follow the options supplied in --rsync; Airlift does not impose them.
-Re-submit the list after an interruption and rsync will reconcile files and
-reuse partial data. Default rsync quick-check semantics apply (size and mtime);
-this is not a checksum audit or a persisted dispatcher checkpoint. The queue is
-currently in memory. Q detaches the monitor without closing the dispatcher.
+The queue and results are in memory: there is no persistent checkpoint or job-history
+database. After an interruption, rerun the selection and let rsync reconcile the
+destination. Partial-data reuse and destination replacement depend on the options
+you supplied. Default rsync quick checks use size and mtime; this is not a checksum
+audit or a guarantee of application consistency.
 
-Transferring a live MyISAM data directory is not a consistent backup. Consistency
-must be arranged by the calling application before its final synchronization.
+For databases, VM images and other live datasets, arrange a consistent snapshot
+or a coordinated shutdown for the authoritative final pass. In particular,
+pre-copying a running MyISAM database is not a consistent backup.
 
-## Terminal monitor
+## Validation
 
-After `:monitor:installDist`, launch `monitor/build/install/rsync-airlift-monitor/bin/rsync-airlift-monitor`
-(add `.bat` on Windows). The default is always a real terminal, including on
-Windows. Swing is opened only when --swing is explicitly supplied. When there is
-no interactive terminal, startup fails with instructions instead of opening a GUI.
-The UI refreshes every 200 ms,
-supports resizing, and asks for at least 64 columns by 16 rows.
-
-```text
-rsync-airlift-monitor --demo
-rsync-airlift-monitor --serve-demo --endpoint demo.connection
-rsync-airlift-monitor --attach demo.connection
-rsync-airlift-monitor --demo --swing
-rsync-airlift-monitor --attach demo.connection --swing
-```
-
-Demo data is explicitly labelled, includes one simulated failure, and never
-contacts an SSH host. A demo server continues running after Q and after all
-simulated transfers finish so it can be reattached; Ctrl+C in its launching
-console stops it. Use a distinct endpoint path for each concurrent run.
-
-| Key | Action |
-| --- | --- |
-| 1 / 2 / 3, Tab | Workers / queue / errors |
-| Up / Down, PgUp / PgDn, Home / End | Select and scroll |
-| F2, Enter | Toggle worker details (requires 22 rows) |
-| P | Pause/resume new task assignment; active files continue |
-| + / - | Increase/decrease target concurrency; minimum one worker |
-| Q | Close panel only; dispatcher and endpoint stay alive |
-
-The worker view shows progress, file size, logical rate and compact ETA; paths appear in Details.
-The error view includes task errors and SSH connection failures. Details show the selected worker number, file path, state, size, attempt count, matched/new bytes, speed and errors. Log paths and raw log output are kept off the screen; raw logs remain on disk.
-
-## Running real transfers with an attachable monitor
-
-```sh
-rsync-airlift-monitor --serve \
-  --files files.txt --workers 16 \
-  user@source-server:/srv/source/ /srv/destination/ \
-  --endpoint /home/user/airlift.connection
-
-# In another shell on the same server:
-rsync-airlift-monitor --attach /home/user/airlift.connection
-
-# From your laptop, with the executable installed in the server's PATH:
-ssh -t user@dispatcher-server 'rsync-airlift-monitor --attach /home/user/airlift.connection'
-```
-
-`--files` is a UTF-8 list of relative paths, one per line (or NUL-separated with
-`--null`). Without `--files`, the CLI discovers files under the source directory.
-The source can also be a single file or a quoted mask, locally or over SSH:
-
-```sh
-rsync-airlift-monitor --rsync "-avH --partial --inplace" \
-  'root@111.111.111.111:/var/lib/mysql/mydb/*.MYD' /srv/destination/
-```
-
-With a mask and `--files`, both selections are combined without duplicates;
-manifest entries are relative to the directory before the first wildcard.
-With `--files` and no mask, only manifest entries are selected.
-`*` and `?` match one path component; `**` crosses directories, and bracket
-classes such as `[abc]` are supported. Quote masks to prevent shell expansion.
-Directory discovery is recursive and does not follow directory symlinks.
-Remote discovery requires GNU `find` and a POSIX shell on the SSH server.
-The CLI reads source sizes before starting any workers and sorts tasks by size,
-largest first (ties by path). Missing listed files abort preparation. Sizes are
-a snapshot: changing files can invalidate the totals during a transfer.
-This preparation belongs to the CLI; the core library still preserves input order.
-Other CLI options:
-`--port N`, `--identity FILE`, `--rsync "OPTIONS"`. Swap SOURCE and DESTINATION to reverse direction.
-
-Multiple sources use `SOURCE [SOURCE ...] DESTINATION`: the last argument is
-always the destination. Expanded local shell masks work directly:
-
-```sh
-rsync-airlift-monitor --rsync "-av --partial" /data/*.MYD user@host:/backup/
-rsync-airlift-monitor --rsync "-av" /data/one.bin /other/two.bin user@host:/backup/
-```
-
-All sources must be local for upload, or remote on the same SSH host for download.
-For multiple directory sources, `dir/` copies its contents and `dir` retains the
-directory name. Repeated source files are deduplicated; different source files
-that map to the same destination path cause a preparation error. Sizes are sorted
-across the whole combined queue. With multiple roots, `--files` entries are
-resolved relative to each root and must exist in at least one of them.
-
-The monitor service binds only 127.0.0.1 on an ephemeral port. Its connection file
-contains a random access token and port (owner-only permissions on POSIX).
-Treat that file as a local credential. Requests use a versioned bounded data
-format, with no Java object deserialization. The service accepts monitor commands
-only; it does not accept shell commands or new file lists. It stays available
-after completion for reviewing errors. Ctrl+C stops it and removes its connection
-file. An unclean process kill can leave a stale file; choose another endpoint
-path or remove the stale file after verifying the old dispatcher is gone.
-
-The dispatcher process still needs tmux or a service to survive an SSH-session
-logout. An attached monitor can be disconnected independently.
-
-Use the installed launcher for console mode so the application owns terminal
-input/output directly. Gradle :monitor:run may redirect streams or interleave
-its status output; use that task for building or for --demo --swing instead.
-For SSH, allocate a pseudo-terminal with ssh -t; no X11 forwarding is required.
-Windows console modes and dimensions are managed using JLine's JNI provider;
-Lanterna still draws the interface and decodes key sequences. Raw input and the
-alternate screen are restored on normal exit and Ctrl+C. Terminal font and zoom
-belong to your console application. AIRLIFT_FONT/AIRLIFT_FONT_SIZE apply only to
-the explicit Swing mode.
-
-For use from another JVM application, wrap a running AirliftDispatcher in
-DispatcherMonitorSource, expose it using MonitorServer(source, endpoint), and/or
-open AirliftMonitor(source).run(). Neither the monitor nor the server owns or
-closes the dispatcher. Close their resources separately at application shutdown.
-
-Tests cover queue execution, lifecycle controls, Lanterna virtual-terminal
-rendering, Q detachment, and the actual localhost protocol with reconnects.
-Live SSH/rsync and an interactive physical terminal require a separate smoke run.
-
-Swing terminal font defaults to Consolas (with installed monospace fallbacks), 18 pt, antialiased, 110 x 30 cells. Set AIRLIFT_FONT_SIZE (12-40) and optionally AIRLIFT_FONT before launching to customize it. Real terminal/SSH fonts are controlled by your terminal application.
-
-Demo runs now default to a connection file inside their unique temporary run directory (printed at startup). Repeated --demo runs do not collide. Explicit --endpoint files are never overwritten; an existing file now reports --attach and --endpoint recovery options.
-
-Overall progress measures processed work: successful and finally failed tasks both consume their full size; pending and cancelled files do not. With missing or all-zero sizes, progress uses task count and available per-file percentages. Logical bytes and success/failure counters remain separate. Workers that naturally exhaust the queue are FINISHED; STOPPED is reserved for cancellation or concurrency retirement. Restart dispatcher and monitor together after this worker-status protocol change.
-
-Worker rows show a progress bar, percent, job size, logical rate and compact ETA (s/m/h/d/w). Paths remain in Details. Final rsync --stats split is cyan (matched) and green (new data). Counters become known only at the end of an attempt and are not compressed wire bytes. Missing statistics stay unknown. Last job and statistics remain visible after workers finish. Demo final counters are explicitly simulated (60% matched). Monitor protocol is now version 3; restart dispatcher and monitor together.
-
-Worker panels use vertical | ticks with blank unfilled cells. Headers and values share one layout. Panels fill vertically before adding columns and are capped at 88 characters. Left/Right moves between columns. Natural FINISHED is omitted from worker rows; failed connections remain until dismissed with minus. Completed worker bars split matched/new data when final statistics are available. The overall bar aggregates the complete task ledger: cyan matched, green new, red failed work, yellow processed work with no final breakdown (including in-flight progress). Empty cells are pending work. Successful files remain counted after workers move to new jobs. No disk checkpoint or persistent job history is implied by the in-memory aggregate.
-
-After a successful file, SPEED retains file size divided by elapsed task processing time (including retries/backoff, excluding queue wait and initial SSH connection). This is logical file throughput, not wire traffic. Completed averages are excluded from live aggregate speed. ETA is blank for terminal file states.
-
-From and To are displayed immediately below the title and reflect upload/download direction. The standalone monitor receives them through the connection metadata file; restart the dispatcher to populate metadata for an old run.
-
-Real transfer syntax: rsync-airlift-monitor [options] SOURCE DESTINATION --files files.txt. Exactly one endpoint is remote: user@host:/absolute/directory/. Reversing the paths changes upload/download direction. Two paths default to an immediate TUI; --run is optional and --serve stays headless. Example: rsync-airlift-monitor --files files.txt --workers 4 user@server:/srv/source/ /srv/destination/. Q detaches; Ctrl+C stops. Real transfers require Linux or WSL with JDK 21, OpenSSH and rsync. This accepts directory roots and a caller-prepared relative file list; it does not discover files; copy flags can be supplied through --rsync. The old --host, --remote-root, --local-root and --upload options have been removed.
-
-## Batching small files
-
-The launcher sorts the input files largest first, then fills each rsync job until
-the accumulated source size reaches **5 MiB or more**, or the queue ends.
-The final job may be smaller. Each job is assigned to one available worker and
-uses one rsync process. Files larger than the threshold naturally fill a job on
-their own when encountered in this descending order. A different source root
-also closes the current job: rsync needs one common source root per invocation.
-
-Set the minimum load with `--batch-min-size` (bytes, decimal `KB`/`MB`/`GB`, or
-binary `KiB`/`MiB`/`GiB`, case-insensitive). `5MB` is 5,000,000 bytes;
-the default `5MiB` is 5,242,880 bytes:
-
-```sh
-java -jar rsync-airlift.jar --batch-min-size 5MiB --workers 8 \
-  --rsync "-av --partial" user@host:/source/ /destination/
-```
-
-There is no file-count limit on a job: zero-length files can share one invocation.
-File lists use NUL-separated stdin with `--from0 --files-from=-`, preserving spaces
-and newlines without temporary manifest files. The library accepts explicit batches
-using `TransferTask.files`; the CLI creates these batches automatically.
-
-Worker size and progress refer to the entire batch. Details show its file count,
-the current filename when rsync announces it, its index in the submitted list,
-and rsync's transferred-file counter. That counter excludes quick-check skips;
-it is not a count of all processed files, and rsync may reorder the input list.
-Final matched/new statistics split the worker bar when the job completes and
-accumulate into the overall bar. Exact live matched/new counters are unavailable
-until rsync reports its final statistics. Successfully skipped bytes count as Matched.
-
-`Done` counts files, not rsync processes, and advances when a job succeeds.
-If a batch exits unsuccessfully, its individual outcomes cannot be confirmed from
-the exit code alone: all files in that batch are conservatively counted as failed,
-even if some were copied successfully. Retrying reruns the entire batch; rsync
-reconciles files according to the supplied options. Each attempt has one shared log.
-Pause and concurrency reduction take effect between batches.
-
-The monitor protocol is now version 3. Restart dispatcher and attached monitors
-together when deploying this update. Third-party libraries are unchanged.
-
-## Custom rsync options
-
-```sh
-rsync-airlift-monitor --files files.txt --workers 4 \
-  --rsync "-avH --partial --inplace --bwlimit=90000" \
-  root@server:/srv/source/ /srv/destination/
-```
-
-The --rsync string is split into arguments with single/double quoting and escapes.
-No shell is launched and no variables, command substitutions or wildcards expand.
-Copy options come exclusively from --rsync. Airlift injects no archive, partial, inplace or bandwidth settings, including when --rsync is omitted. Put --bwlimit inside --rsync; it applies per worker. Airlift still appends its file-list, relative-path,
-SSH ControlMaster, progress and statistics options. -e/--rsh, --files-from and
-an option terminator inside --rsync are reserved; use --port/--identity and
---files on the Airlift command. This is argument forwarding, not shell code.
-
---inplace modifies the destination directly and implies --partial. It conflicts
-with --partial-dir, which keeps partial transfer data separately. Partial files
-can be reused on a subsequent run; neither option provides a consistent snapshot
-of a changing source.
+Tests cover scheduling, batch accounting, directory-coverage decisions, SSH command
+selection and prompt flows, virtual-terminal rendering, mouse decoding, controls,
+and the localhost attach protocol. Real SSH/rsync transfer experiments are described
+above; automated unit tests do not replace an integration test on your target hosts.

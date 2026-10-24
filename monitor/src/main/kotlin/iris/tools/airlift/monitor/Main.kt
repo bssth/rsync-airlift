@@ -81,8 +81,12 @@ private fun launch(args: List<String>) {
                 .also { println("Prepared ${it.tasks.size} files, ${it.tasks.sumOf { task -> requireNotNull(task.size) }} bytes; largest first.") }
         }
     val config = plan.config
-    val tasks = if (demo) plan.tasks else batchSmallFiles(plan.tasks, batchSize(options["--batch-min-size"] ?: "5MiB"))
-    if (!demo) println("${plan.tasks.size} files scheduled in ${tasks.size} rsync jobs.")
+    val tasks = if (demo) plan.tasks else {
+        val collapser = DirectoryCollapser(plan.inventories, options["--rsync"])
+        batchSmallFiles(plan.tasks, batchSize(options["--batch-min-size"] ?: "5MiB")).map(collapser::optimize)
+    }
+    if (!demo) println("${plan.tasks.size} files scheduled in ${tasks.size} rsync jobs; " +
+        "${tasks.sumOf { it.entries.ifEmpty { it.files.ifEmpty { listOf(it.path) } }.size }} file-list entries after directory optimization.")
     val endpoint = monitorEndpoint(options["--endpoint"], if (demo) config.localRoot.parent else null)
     val dispatcher = if (demo) AirliftDispatcher(config, tasks, demoSessions()) else AirliftDispatcher(config, tasks)
     val source = DispatcherMonitorSource(dispatcher, if (demo) "RSYNC AIRLIFT | DEMO - SIMULATED DATA" else "RSYNC AIRLIFT",

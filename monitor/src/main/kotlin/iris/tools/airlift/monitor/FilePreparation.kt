@@ -6,14 +6,19 @@ import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 
-internal data class FileInventory(val singleFile: Boolean, val sizes: Map<String, Long>)
-internal data class PreparedTransfer(val config: AirliftConfig, val tasks: List<TransferTask>)
+internal data class FileInventory(val singleFile: Boolean, val sizes: Map<String, Long>,
+    val directories: Set<String> = emptySet(), val otherEntries: Set<String> = emptySet())
+internal data class DirectoryInventory(val sourceRoot: String?, val scope: String, val files: Set<String>,
+    val directories: Set<String>, val otherEntries: Set<String>)
+internal data class PreparedTransfer(val config: AirliftConfig, val tasks: List<TransferTask>,
+    val inventories: List<DirectoryInventory> = emptyList())
 
 internal fun prepareSources(config: AirliftConfig, roots: List<TransferRoots>, manifest: Path? = null, nulSeparated: Boolean = false): PreparedTransfer {
     if (roots.size == 1) return prepareTransfer(config, manifest, nulSeparated,
         source = if (config.direction == TransferDirection.DOWNLOAD) roots.single().remoteRoot else roots.single().localRoot.replace('\\', '/'))
     val tasks = linkedMapOf<String, TransferTask>()
     val found = mutableSetOf<String>()
+    val inventories = mutableListOf<DirectoryInventory>()
     for (root in roots) {
         val source = if (config.direction == TransferDirection.DOWNLOAD) root.remoteRoot else Path.of(sourceBase(root.localRoot.replace('\\', '/'))).toAbsolutePath().toString().replace('\\', '/').let { base ->
             val raw = root.localRoot.replace('\\', '/')
@@ -28,6 +33,10 @@ internal fun prepareSources(config: AirliftConfig, roots: List<TransferRoots>, m
         val directory = source.none { it in "*?[" } && source.trimEnd('/') == sourceRoot.trimEnd('/')
         val prefix = if (directory && !source.endsWith('/')) sourceRoot.trimEnd('/').substringAfterLast('/') + "/" else ""
         if (prefix.isNotEmpty()) sourceRoot = sourceRoot.trimEnd('/').substringBeforeLast('/').ifEmpty { "/" }
+        inventories.addAll(plan.inventories.map { inventory ->
+            fun mapped(paths: Set<String>) = paths.map { (prefix + it).trimEnd('/') }.toSet()
+            DirectoryInventory(sourceRoot, prefix.trimEnd('/'), mapped(inventory.files), mapped(inventory.directories), mapped(inventory.otherEntries))
+        })
         for (task in plan.tasks) {
             found.add(task.path)
             val path = prefix + task.path
@@ -38,7 +47,7 @@ internal fun prepareSources(config: AirliftConfig, roots: List<TransferRoots>, m
         }
     }
     if (manifest != null) require(manifestPaths(manifest, nulSeparated).all { it in found }) { "Some --files entries were not found in any source" }
-    return PreparedTransfer(config, tasks.values.sortedWith(compareByDescending<TransferTask> { it.size }.thenBy { it.path }))
+    return PreparedTransfer(config, tasks.values.sortedWith(compareByDescending<TransferTask> { it.size }.thenBy { it.path }), inventories)
 }
 
 private fun manifestPaths(manifest: Path, nulSeparated: Boolean): List<String> {
@@ -74,7 +83,8 @@ internal fun prepareTransfer(
     }.sortedWith(compareByDescending<TransferTask> { it.size }.thenBy { it.path })
     val preparedConfig = if (config.direction == TransferDirection.DOWNLOAD) config.copy(remoteRoot = root)
         else config.copy(localRoot = Path.of(root))
-    return PreparedTransfer(preparedConfig, tasks)
+    return PreparedTransfer(preparedConfig, tasks, if (listing.singleFile) emptyList() else listOf(
+        DirectoryInventory(null, "", listing.sizes.keys, listing.directories, listing.otherEntries)))
 }
 
 internal fun sourceBase(source: String): String {
@@ -116,11 +126,18 @@ private fun readInventory(config: AirliftConfig, source: String): FileInventory 
             return FileInventory(true, mapOf(root.fileName.toString() to attributes.size()))
         }
         val sizes = linkedMapOf<String, Long>()
+        val directories = linkedSetOf<String>()
+        val others = linkedSetOf<String>()
         Files.walk(root).use { paths -> paths.forEach { path ->
             val attrs = Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
-            if (attrs.isRegularFile || attrs.isSymbolicLink) sizes[root.relativize(path).toString().replace('\\', '/')] = attrs.size()
+            val relative = root.relativize(path).toString().replace('\\', '/')
+            when {
+                attrs.isRegularFile || attrs.isSymbolicLink -> sizes[relative] = attrs.size()
+                attrs.isDirectory -> directories.add(relative)
+                else -> others.add(relative)
+            }
         } }
-        return FileInventory(false, sizes)
+        return FileInventory(false, sizes, directories, others)
     }
     val command = mutableListOf(config.sshExecutable, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
         "-o", "ConnectTimeout=${config.connectTimeoutSeconds}", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-p", config.port.toString())
@@ -143,12 +160,24 @@ private fun readInventory(config: AirliftConfig, source: String): FileInventory 
         check(process.waitFor() == 0) { "Cannot collect source files over SSH: ${Files.readString(errors).takeLast(4096)}" }
         require(records.firstOrNull() in listOf("D", "F")) { "Invalid SSH file inventory" }
         val sizes = linkedMapOf<String, Long>()
+        val directories = linkedSetOf<String>()
+        val others = linkedSetOf<String>()
         records.drop(1).forEach { record ->
+            if (records.first() == "D") {
+                val fields = record.split('\t', limit = 3)
+                require(fields.size == 3) { "Invalid SSH file metadata" }
+                when (fields[0]) {
+                    "f", "l" -> sizes[fields[2]] = fields[1].toLong()
+                    "d" -> directories.add(fields[2])
+                    else -> others.add(fields[2])
+                }
+                return@forEach
+            }
             val split = record.indexOf('\t')
             require(split > 0) { "Invalid SSH file metadata" }
             sizes[record.substring(split + 1)] = record.substring(0, split).toLong()
         }
-        return FileInventory(records.first() == "F", sizes)
+        return FileInventory(records.first() == "F", sizes, directories, others)
     } finally { process?.let { if (it.isAlive) it.destroyForcibly() }; Files.deleteIfExists(errors) }
 }
 
@@ -156,6 +185,6 @@ internal fun inventoryCommand(source: String): String {
     val path = "'" + source.replace("'", "'\"'\"'") + "'"
     // GNU find, NUL records: paths may contain spaces, tabs and newlines.
     return "if [ -L $path ] || [ -f $path ]; then printf 'F\\0'; find $path -maxdepth 0 -printf '%s\\t%f\\0'; " +
-        "elif [ -d $path ]; then printf 'D\\0'; find $path \\( -type f -o -type l \\) -printf '%s\\t%P\\0'; " +
+        "elif [ -d $path ]; then printf 'D\\0'; find $path -printf '%y\\t%s\\t%P\\0'; " +
         "else printf '%s\\n' 'Source does not exist' >&2; exit 1; fi"
 }

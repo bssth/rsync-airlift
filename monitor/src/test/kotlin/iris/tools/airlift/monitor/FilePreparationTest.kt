@@ -102,7 +102,11 @@ class FilePreparationTest {
             val output = process.inputStream.readAllBytes().toString(Charsets.UTF_8)
             val error = process.errorStream.readAllBytes().toString(Charsets.UTF_8)
             assertEquals(0, process.waitFor(), error)
-            assertEquals(setOf("D", "17\twith space", "5\tnested/other", ""), output.split('\u0000').toSet())
+            val records = output.split('\u0000')
+            assertEquals("D", records.first())
+            assertTrue("f\t17\twith space" in records)
+            assertTrue("f\t5\tnested/other" in records)
+            assertTrue(records.any { it.startsWith("d\t") && it.endsWith("\tnested") })
         } finally { parent.toFile().deleteRecursively() }
     }
 }

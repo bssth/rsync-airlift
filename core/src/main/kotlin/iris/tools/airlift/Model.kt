@@ -3,7 +3,7 @@ package iris.tools.airlift
 /** Paths are relative to the roots. sourceRoot optionally overrides only the source for this task.
  * Input order is preserved; id and destination path must be unique across the transfer. */
 data class TransferTask(val path: String, val size: Long? = null, val id: String = path, val sourceRoot: String? = null,
-    val files: List<String> = emptyList()) {
+    val files: List<String> = emptyList(), val entries: List<String> = emptyList()) {
     val fileCount: Int get() = files.size.coerceAtLeast(1)
     init {
         require(id.isNotBlank()) { "Task id must not be blank" }
@@ -14,6 +14,10 @@ data class TransferTask(val path: String, val size: Long? = null, val id: String
         require(sourceRoot == null || (sourceRoot.isNotEmpty() && '\u0000' !in sourceRoot))
         files.forEach { require(it.isNotEmpty() && !it.startsWith('/') && '\u0000' !in it && it.split('/').none { part -> part in listOf("", ".", "..") }) }
         require(files.distinct().size == files.size)
+        entries.forEach { entry ->
+            val relative = entry.removeSuffix("/")
+            require(entry == "." || (relative.isNotEmpty() && !relative.startsWith('/') && '\u0000' !in relative && relative.split('/').none { it in listOf("", ".", "..") }))
+        }
     }
 }
 
