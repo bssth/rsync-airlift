@@ -3,10 +3,9 @@ package iris.tools.airlift.monitor
 import iris.tools.airlift.*
 import java.io.*
 import java.net.*
-import java.nio.file.Files
+import iris.tools.airlift.io.JvmFileAccess
 import java.nio.file.Path
 import java.nio.file.FileAlreadyExistsException
-import java.nio.file.attribute.PosixFilePermissions
 import java.util.Properties
 import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
@@ -22,10 +21,9 @@ class MonitorServer(private val source: MonitorSource, val endpoint: Path) : Aut
 
     init {
         try {
-            endpoint.toAbsolutePath().parent?.let { Files.createDirectories(it) }
+            endpoint.toAbsolutePath().parent?.let { JvmFileAccess.createDirectories(it) }
             // Do not overwrite another dispatcher's connection file.
-            try { Files.createFile(endpoint, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))) }
-            catch (_: UnsupportedOperationException) { Files.createFile(endpoint) }
+            JvmFileAccess.createPrivateFile(endpoint)
             val properties = Properties().apply {
                 setProperty("port", server.localPort.toString())
                 setProperty("token", token)
@@ -34,7 +32,7 @@ class MonitorServer(private val source: MonitorSource, val endpoint: Path) : Aut
                 setProperty("to", source.to)
                 setProperty("protocol", "3")
             }
-            Files.newOutputStream(endpoint).use { properties.store(it, "Rsync Airlift local monitor connection") }
+            JvmFileAccess.outputStream(endpoint).use { properties.store(it, "Rsync Airlift local monitor connection") }
         } catch (e: Exception) {
             server.close()
             handlers.shutdownNow()
@@ -93,12 +91,12 @@ class MonitorServer(private val source: MonitorSource, val endpoint: Path) : Aut
         closed = true
         server.close()
         handlers.shutdownNow()
-        Files.deleteIfExists(endpoint)
+        JvmFileAccess.deleteIfExists(endpoint)
     }
 }
 
 class RemoteMonitorSource(endpoint: Path) : MonitorSource {
-    private val properties = Properties().apply { Files.newInputStream(endpoint).use { load(it) } }
+    private val properties = Properties().apply { JvmFileAccess.inputStream(endpoint).use { load(it) } }
     init {
         require(properties.getProperty("protocol") == "3") { "Monitor protocol changed. Restart dispatcher and monitor together." }
     }

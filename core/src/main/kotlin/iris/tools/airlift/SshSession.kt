@@ -1,6 +1,6 @@
 package iris.tools.airlift
 
-import java.nio.file.Files
+import iris.tools.airlift.io.JvmFileAccess
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
@@ -13,7 +13,7 @@ private class SshSession(private val config: AirliftConfig) : TransferSession {
     private var closed = false
     private val processes = mutableSetOf<Process>()
     // Short paths avoid the small Unix-domain socket path limit.
-    private val directory = Files.createTempDirectory("airlift-")
+    private val directory = JvmFileAccess.temporaryDirectory("airlift-")
     private val socket = directory.resolve("s")
     private val base get() = buildList {
         add(config.sshExecutable)
@@ -36,7 +36,7 @@ private class SshSession(private val config: AirliftConfig) : TransferSession {
         val master = launch(SshAuthentication.command(base + listOf("-M", "-N", "-S", socket.toString(), "-o", "ControlPersist=no", config.host)), directory.resolve("master.log"))
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(config.connectTimeoutSeconds.toLong() + 2)
         while (System.nanoTime() < deadline) {
-            check(master.isAlive) { "SSH master exited: ${Files.readString(directory.resolve("master.log")).takeLast(4096)}" }
+            check(master.isAlive) { "SSH master exited: ${JvmFileAccess.readText(directory.resolve("master.log")).takeLast(4096)}" }
             val probe = launch(base + listOf("-S", socket.toString(), "-O", "check", config.host), directory.resolve("probe.log"))
             val finished = probe.waitFor(1, TimeUnit.SECONDS)
             if (!finished) { probe.destroyForcibly(); probe.waitFor() }
@@ -48,7 +48,7 @@ private class SshSession(private val config: AirliftConfig) : TransferSession {
     }
 
     override fun transfer(task: TransferTask, logFile: Path, progress: (TransferProgress) -> Unit): Int {
-        Files.createDirectories(config.localRoot)
+        JvmFileAccess.createDirectories(config.localRoot)
         val transport = (base + listOf("-S", socket.toString(), "-o", "ControlMaster=no", "-o", "ProxyCommand=false"))
             .joinToString(" ") { quote(it) }
         val address = config.host.substringAfterLast('@')
@@ -62,7 +62,7 @@ private class SshSession(private val config: AirliftConfig) : TransferSession {
         val entries = task.entries
         val command = RsyncCommand.build(config, transport, source, destination,
             recursive = entries.any { it == "." || it.endsWith('/') })
-        Files.newBufferedWriter(logFile).use { log ->
+        JvmFileAccess.bufferedWriter(logFile).use { log ->
             val process = launch(command)
             val inputFailure = java.util.concurrent.atomic.AtomicReference<Exception?>()
             // Feed the list while draining output: long lists must not deadlock
@@ -114,7 +114,7 @@ private class SshSession(private val config: AirliftConfig) : TransferSession {
         owned.forEach {
             if (!it.waitFor(2, TimeUnit.SECONDS)) { it.destroyForcibly(); it.waitFor() }
         }
-        Files.walk(directory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) } }
+        JvmFileAccess.deleteOwnedDirectory(directory)
     }
 
     private fun quote(value: String): String = "'" + value.replace("'", "'\\''") + "'"

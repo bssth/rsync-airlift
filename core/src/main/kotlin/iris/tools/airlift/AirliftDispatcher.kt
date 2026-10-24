@@ -1,11 +1,14 @@
 package iris.tools.airlift
 
-import java.nio.file.Files
+import iris.tools.airlift.io.JvmFileAccess
 import java.util.ArrayDeque
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.concurrent.thread
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.future.asCompletableFuture
 
 /** Single-use dispatcher. snapshot() is safe to poll from an independent monitor. */
 class AirliftDispatcher(
@@ -17,7 +20,12 @@ class AirliftDispatcher(
         "${config.host}:${config.remoteRoot}" else config.localRoot.toAbsolutePath().normalize().toString()
     val destinationDescription: String get() = if (config.direction == TransferDirection.DOWNLOAD)
         config.localRoot.toAbsolutePath().normalize().toString() else "${config.host}:${config.remoteRoot}"
-    private val lock = Object()
+    // Public controls and progress callbacks remain synchronous on JVM.
+    // This lock protects only short state changes; no suspension or transfer holds it.
+    private val lock = Any()
+    private val supervisor = SupervisorJob()
+    private val scope = CoroutineScope(supervisor + Dispatchers.IO)
+    private val wakeup = MutableStateFlow(0L)
     private val states = tasks.associate { it.id to TaskState(it) }.toMutableMap()
     private val taskIndexes = tasks.mapIndexed { index, task -> task.id to index }.toMap()
     private lateinit var runLogDirectory: java.nio.file.Path
@@ -25,7 +33,7 @@ class AirliftDispatcher(
     private val workers = linkedMapOf<Int, WorkerState>()
     private val activeSessions = ConcurrentHashMap<Int, TransferSession>()
     private val started = AtomicBoolean()
-    private val result = CompletableFuture<AirliftSnapshot>()
+    private val result = CompletableDeferred<AirliftSnapshot>()
     private var paused = false
     private var cancelled = false
     private var targetWorkers = config.workers
@@ -43,58 +51,64 @@ class AirliftDispatcher(
     private fun completeLocked() {
         finishedAtMillis = System.currentTimeMillis()
         result.complete(snapshotLocked())
+        supervisor.complete()
     }
 
     fun start(): CompletableFuture<AirliftSnapshot> = synchronized(lock) {
         check(!cancelled && started.compareAndSet(false, true)) { "Dispatcher is closed or already started" }
-        Files.createDirectories(config.logDirectory)
-        runLogDirectory = Files.createTempDirectory(config.logDirectory, "run-")
+        JvmFileAccess.createDirectories(config.logDirectory)
+        runLogDirectory = JvmFileAccess.temporaryDirectory(config.logDirectory, "run-")
         startedAtMillis = System.currentTimeMillis()
         if (queue.isEmpty()) completeLocked() else replenishLocked()
         // Return a dependent future so a caller cannot complete/cancel internal bookkeeping.
-        result.thenApply { it }
+        result.asCompletableFuture().thenApply { it }
     }
 
     fun pause() = synchronized(lock) { paused = true }
-    fun resume() = synchronized(lock) { paused = false; lock.notifyAll() }
+    fun resume() = synchronized(lock) { paused = false; signalLocked() }
 
-    /** Decreasing concurrency retires workers after their current file. */
+    private fun signalLocked() { wakeup.value++ }
+
+    /** Decreasing concurrency retires workers after their current job. */
     fun setWorkerCount(count: Int) = synchronized(lock) {
         require(count > 0)
-        check(!cancelled && !result.isDone)
+        check(!cancelled && !result.isCompleted)
         targetWorkers = count
         if (started.get()) replenishLocked()
-        lock.notifyAll()
+        signalLocked()
     }
 
+    @OptIn(DelicateCoroutinesApi::class)
     private fun replenishLocked() {
         while (!cancelled && queue.isNotEmpty() && liveWorkers < targetWorkers) {
             val id = ++nextWorker
             liveWorkers++
             workers[id] = WorkerState(id, WorkerStatus.CONNECTING)
-            thread(name = "airlift-worker-$id") { runWorker(id) }
+            // Even a worker cancelled before dispatch must execute its finally bookkeeping.
+            scope.launch(CoroutineName("airlift-worker-$id"), start = CoroutineStart.ATOMIC) { runWorker(id) }
         }
     }
 
-    private fun takeTask(id: Int): TransferTask? = synchronized(lock) {
+    private suspend fun takeTask(id: Int): TransferTask? {
         while (true) {
-            if (cancelled) return null
-            if (liveWorkers > targetWorkers) return null
-            if (queue.isEmpty()) return null
-            if (!paused) {
-                val taskId = queue.removeFirst()
-                val state = states.getValue(taskId)
-                states[taskId] = state.copy(status = TaskStatus.RUNNING)
-                workers[id] = WorkerState(id, WorkerStatus.TRANSFERRING, taskId)
-                return state.task
+            val observed = synchronized(lock) {
+                if (cancelled || liveWorkers > targetWorkers || queue.isEmpty()) return null
+                if (!paused) {
+                    val taskId = queue.removeFirst()
+                    val state = states.getValue(taskId)
+                    states[taskId] = state.copy(status = TaskStatus.RUNNING)
+                    workers[id] = WorkerState(id, WorkerStatus.TRANSFERRING, taskId)
+                    return state.task
+                }
+                workers[id] = WorkerState(id, WorkerStatus.IDLE)
+                wakeup.value
             }
-            workers[id] = WorkerState(id, WorkerStatus.IDLE)
-            lock.wait()
+            // Versioning avoids lost notifications between releasing the lock and subscribing.
+            wakeup.first { it != observed }
         }
-        @Suppress("UNREACHABLE_CODE") null
     }
 
-    private fun runWorker(id: Int) {
+    private suspend fun runWorker(id: Int) {
         var session: TransferSession? = null
         var fatal: String? = null
         try {
@@ -122,18 +136,13 @@ class AirliftDispatcher(
                         success = code == 0
                         error = if (success) null else "rsync exited with code $code" +
                             if (task.fileCount > 1) "; batch of ${task.fileCount} files has unconfirmed outcomes; retry the batch" else ""
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         error = e.message ?: e.javaClass.simpleName
                     }
                     if (success) break
-                    if (attempt < config.maxAttempts) synchronized(lock) {
-                        val deadline = System.nanoTime() + config.retryDelayMillis * 1_000_000
-                        while (!cancelled) {
-                            val remaining = (deadline - System.nanoTime()) / 1_000_000
-                            if (remaining <= 0) break
-                            lock.wait(remaining)
-                        }
-                    }
+                    if (attempt < config.maxAttempts) delay(config.retryDelayMillis)
                 }
                 synchronized(lock) {
                     val current = states.getValue(task.id)
@@ -157,6 +166,8 @@ class AirliftDispatcher(
                     workers[id] = WorkerState(id, WorkerStatus.IDLE, task.id)
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             fatal = e.message ?: e.javaClass.simpleName
         } finally {
@@ -183,7 +194,7 @@ class AirliftDispatcher(
                     queue.clear()
                     completeLocked()
                 }
-                lock.notifyAll()
+                signalLocked()
             }
         }
     }
@@ -196,9 +207,10 @@ class AirliftDispatcher(
             for ((id, state) in states.toMap()) {
                 if (state.status == TaskStatus.QUEUED) states[id] = state.copy(status = TaskStatus.CANCELLED)
             }
-            lock.notifyAll()
-            if (liveWorkers == 0 && !result.isDone) completeLocked()
+            signalLocked()
+            if (liveWorkers == 0 && !result.isCompleted) completeLocked()
         }
+        supervisor.cancel()
         activeSessions.values.forEach { runCatching { it.close() } }
     }
 }

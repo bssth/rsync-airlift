@@ -1,7 +1,7 @@
 package iris.tools.airlift.monitor
 
 import iris.tools.airlift.*
-import java.nio.file.Files
+import iris.tools.airlift.io.JvmFileAccess
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -60,7 +60,7 @@ private fun launch(args: List<String>) {
     val allRoots = if (demo) emptyList() else TransferRoots.parseSources(arguments.paths)
     val roots = allRoots.firstOrNull()
     val initialConfig = if (demo) {
-        val root = Files.createTempDirectory("airlift-demo-")
+        val root = JvmFileAccess.temporaryDirectory("airlift-demo-")
         AirliftConfig("demo@localhost", "/demo", root.resolve("files"), workers = options["--workers"]?.toInt() ?: 4, logDirectory = root.resolve("logs"))
     } else requireNotNull(roots).let { roots -> AirliftConfig(
         host = roots.host, remoteRoot = roots.remoteRoot, localRoot = Path.of(if (roots.direction == TransferDirection.UPLOAD) sourceBase(roots.localRoot.replace('\\', '/')) else roots.localRoot),
@@ -123,7 +123,7 @@ private fun demoSessions() = TransferSessionFactory {
         override fun connect() { check(!closed.get()) }
         override fun transfer(task: TransferTask, logFile: Path, progress: (TransferProgress) -> Unit): Int {
             val size = requireNotNull(task.size)
-            Files.newBufferedWriter(logFile).use { log ->
+            JvmFileAccess.bufferedWriter(logFile).use { log ->
                 log.appendLine("DEMO: simulated transfer ${task.path}"); log.flush()
                 for (step in 1..100) {
                     if (closed.get()) return 20

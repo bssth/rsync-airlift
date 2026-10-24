@@ -1,10 +1,8 @@
 package iris.tools.airlift.monitor
 
 import iris.tools.airlift.*
-import java.nio.file.Files
-import java.nio.file.LinkOption.NOFOLLOW_LINKS
+import iris.tools.airlift.io.JvmFileAccess
 import java.nio.file.Path
-import java.nio.file.attribute.BasicFileAttributes
 
 internal data class FileInventory(val singleFile: Boolean, val sizes: Map<String, Long>,
     val directories: Set<String> = emptySet(), val otherEntries: Set<String> = emptySet())
@@ -51,7 +49,7 @@ internal fun prepareSources(config: AirliftConfig, roots: List<TransferRoots>, m
 }
 
 private fun manifestPaths(manifest: Path, nulSeparated: Boolean): List<String> {
-    val content = Files.readString(manifest)
+    val content = JvmFileAccess.readText(manifest)
     return (if (nulSeparated) content.split('\u0000') else content.split('\n').map { it.removeSuffix("\r") })
         .filter { it.isNotEmpty() }.onEach { TransferTask(it) }
 }
@@ -118,32 +116,12 @@ internal fun fileMask(mask: String): Regex {
 }
 
 private fun readInventory(config: AirliftConfig, source: String): FileInventory {
-    if (config.direction == TransferDirection.UPLOAD) {
-        val root = Path.of(source).toAbsolutePath().normalize()
-        val attributes = Files.readAttributes(root, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
-        if (!attributes.isDirectory) {
-            require(attributes.isRegularFile || attributes.isSymbolicLink) { "Not a file: $source" }
-            return FileInventory(true, mapOf(root.fileName.toString() to attributes.size()))
-        }
-        val sizes = linkedMapOf<String, Long>()
-        val directories = linkedSetOf<String>()
-        val others = linkedSetOf<String>()
-        Files.walk(root).use { paths -> paths.forEach { path ->
-            val attrs = Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
-            val relative = root.relativize(path).toString().replace('\\', '/')
-            when {
-                attrs.isRegularFile || attrs.isSymbolicLink -> sizes[relative] = attrs.size()
-                attrs.isDirectory -> directories.add(relative)
-                else -> others.add(relative)
-            }
-        } }
-        return FileInventory(false, sizes, directories, others)
-    }
+    if (config.direction == TransferDirection.UPLOAD) return readLocalInventory(source)
     val command = mutableListOf(config.sshExecutable, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
         "-o", "ConnectTimeout=${config.connectTimeoutSeconds}", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-p", config.port.toString())
     config.identityFile?.let { command.addAll(listOf("-i", it.toString())) }
     command.addAll(listOf(config.host, inventoryCommand(source)))
-    val errors = Files.createTempFile("airlift-inventory-", ".log")
+    val errors = JvmFileAccess.temporaryFile("airlift-inventory-", ".log")
     var process: Process? = null
     try {
         process = SshAuthentication.configure(ProcessBuilder(SshAuthentication.command(command))).redirectError(errors.toFile()).start()
@@ -157,7 +135,7 @@ private fun readInventory(config: AirliftConfig, source: String): FileInventory 
                 else { record.append(c.toChar()); require(record.length <= 1024 * 1024) { "Invalid SSH inventory record" } }
             }
         }
-        check(process.waitFor() == 0) { "Cannot collect source files over SSH: ${Files.readString(errors).takeLast(4096)}" }
+        check(process.waitFor() == 0) { "Cannot collect source files over SSH: ${JvmFileAccess.readText(errors).takeLast(4096)}" }
         require(records.firstOrNull() in listOf("D", "F")) { "Invalid SSH file inventory" }
         val sizes = linkedMapOf<String, Long>()
         val directories = linkedSetOf<String>()
@@ -178,7 +156,7 @@ private fun readInventory(config: AirliftConfig, source: String): FileInventory 
             sizes[record.substring(split + 1)] = record.substring(0, split).toLong()
         }
         return FileInventory(records.first() == "F", sizes, directories, others)
-    } finally { process?.let { if (it.isAlive) it.destroyForcibly() }; Files.deleteIfExists(errors) }
+    } finally { process?.let { if (it.isAlive) it.destroyForcibly() }; JvmFileAccess.deleteIfExists(errors) }
 }
 
 internal fun inventoryCommand(source: String): String {

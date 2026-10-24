@@ -525,6 +525,20 @@ entry point. It accepts prepared jobs and preserves their order; it does not
 discover files, sort, create batches automatically, or ask confirmation/password
 questions. The monitor CLI provides those preparation and interactive features.
 
+Workers run as coroutines in an owned `SupervisorJob` on `Dispatchers.IO`.
+Pause/resume notifications and retry delays suspend without blocking a thread.
+SSH/process I/O remains blocking on the I/O dispatcher; short state locks keep
+the synchronous controls, snapshots and progress callbacks consistent.
+`start()` still returns a `CompletableFuture` for JVM callers. Closing the
+dispatcher cancels its coroutine scope and terminates owned child processes.
+
+File content I/O uses `kotlinx-io` 0.7.0 behind a small portable implementation.
+The JVM adapters retain the existing `java.nio.file.Path` and stream APIs, atomic
+temporary-file creation, owner-only connection-file creation, and inventory scans
+without following symbolic links. The connection-file format is unchanged.
+This prepares a future KMP split; the project still targets JVM and uses Java
+process, socket and terminal APIs. The `kotlinx-io` filesystem API is experimental.
+
 ```kotlin
 import iris.tools.airlift.*
 import java.nio.file.Path

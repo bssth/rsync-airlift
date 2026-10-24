@@ -6,6 +6,8 @@ plugins {
 kotlin { jvmToolchain(21) }
 
 dependencies {
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-io-core:0.7.0")
     testImplementation(kotlin("test-junit5"))
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
 }

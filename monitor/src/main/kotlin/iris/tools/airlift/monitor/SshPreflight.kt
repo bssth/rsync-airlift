@@ -2,7 +2,7 @@ package iris.tools.airlift.monitor
 
 import iris.tools.airlift.AirliftConfig
 import iris.tools.airlift.SshAuthentication
-import java.nio.file.Files
+import iris.tools.airlift.io.JvmFileAccess
 
 internal data class SshCheckResult(val exitCode: Int, val output: String)
 
@@ -60,7 +60,7 @@ internal fun unknownHostKey(output: String): Boolean =
         Regex("No .* host key is known for .* and you have requested strict checking", RegexOption.IGNORE_CASE).containsMatchIn(output)
 
 private fun runSshCheck(command: List<String>, interactive: Boolean): SshCheckResult {
-    val output = if (interactive) null else Files.createTempFile("airlift-ssh-check-", ".log")
+    val output = if (interactive) null else JvmFileAccess.temporaryFile("airlift-ssh-check-", ".log")
     var process: Process? = null
     try {
         val builder = SshAuthentication.configure(ProcessBuilder(command))
@@ -71,9 +71,9 @@ private fun runSshCheck(command: List<String>, interactive: Boolean): SshCheckRe
         } else builder.redirectErrorStream(true).redirectOutput(requireNotNull(output).toFile())
         process = builder.start()
         if (!interactive) process.outputStream.close()
-        return SshCheckResult(process.waitFor(), output?.let { Files.readString(it).takeLast(8192) }.orEmpty())
+        return SshCheckResult(process.waitFor(), output?.let { JvmFileAccess.readText(it).takeLast(8192) }.orEmpty())
     } finally {
         process?.let { if (it.isAlive) it.destroyForcibly() }
-        output?.let(Files::deleteIfExists)
+        output?.let(JvmFileAccess::deleteIfExists)
     }
 }

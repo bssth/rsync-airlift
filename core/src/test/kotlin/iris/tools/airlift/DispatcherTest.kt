@@ -93,6 +93,93 @@ class DispatcherTest {
         }
     }
 
+    @Test fun `closing during long retry delay promptly cancels the batch and queue`() {
+        val attempted = CountDownLatch(1)
+        val calls = AtomicInteger()
+        val dispatcher = AirliftDispatcher(config(workers = 1, attempts = 3).copy(retryDelayMillis = 60_000),
+            listOf(TransferTask("a", 2, files = listOf("a", "b")), TransferTask("c", 1)),
+            factory { _, _ -> calls.incrementAndGet(); attempted.countDown(); 23 })
+        dispatcher.use {
+            val result = dispatcher.start()
+            assertTrue(attempted.await(5, TimeUnit.SECONDS))
+            dispatcher.close()
+            val final = result.get(5, TimeUnit.SECONDS)
+            assertTrue(final.cancelled)
+            assertTrue(final.tasks.all { it.status == TaskStatus.CANCELLED })
+            assertTrue(final.workers.all { it.status == WorkerStatus.STOPPED })
+            assertEquals(1, calls.get())
+        }
+    }
+
+    @Test fun `retirement stops the first finishing worker without interrupting other jobs`() {
+        val entered = CountDownLatch(2)
+        val first = CountDownLatch(1)
+        val second = CountDownLatch(1)
+        val retired = CountDownLatch(1)
+        val assignments = java.util.concurrent.ConcurrentHashMap<Int, MutableList<String>>()
+        val sessions = TransferSessionFactory { id ->
+            object : TransferSession {
+                override fun connect() {}
+                override fun transfer(task: TransferTask, logFile: Path, progress: (TransferProgress) -> Unit): Int {
+                    assignments.computeIfAbsent(id) { mutableListOf() }.add(task.id)
+                    if (task.id != "c") {
+                        entered.countDown()
+                        check((if (id == 1) first else second).await(5, TimeUnit.SECONDS))
+                    }
+                    return 0
+                }
+                override fun close() { if (id == 2) retired.countDown() }
+            }
+        }
+        AirliftDispatcher(config(), listOf(TransferTask("a"), TransferTask("b"), TransferTask("c")), sessions).use { dispatcher ->
+            try {
+                val result = dispatcher.start()
+                assertTrue(entered.await(5, TimeUnit.SECONDS))
+                dispatcher.setWorkerCount(1)
+                second.countDown()
+                assertTrue(retired.await(5, TimeUnit.SECONDS))
+                awaitCondition { dispatcher.snapshot().workers.single { it.id == 2 }.status == WorkerStatus.STOPPED }
+                first.countDown()
+                assertEquals(3, result.get(5, TimeUnit.SECONDS).completed)
+                assertEquals(1, assignments.getValue(2).size)
+                assertEquals(2, assignments.getValue(1).size)
+                assertEquals(WorkerStatus.STOPPED, dispatcher.snapshot().workers.single { it.id == 2 }.status)
+            } finally { first.countDown(); second.countDown() }
+        }
+    }
+
+    @Test fun `immediate cancellation always finalizes workers even before coroutine dispatch`() {
+        repeat(30) {
+            AirliftDispatcher(config(workers = 8), (1..20).map { TransferTask("$it") }, factory { _, _ -> 0 }).use { dispatcher ->
+                dispatcher.pause()
+                val result = dispatcher.start()
+                dispatcher.close()
+                assertTrue(result.get(5, TimeUnit.SECONDS).cancelled)
+                assertTrue(dispatcher.snapshot().workers.all { it.status == WorkerStatus.STOPPED })
+            }
+        }
+    }
+
+    @Test fun `cancelling a returned future cannot cancel internal completion`() {
+        AirliftDispatcher(config(workers = 1), listOf(TransferTask("a")), factory { _, _ -> 0 }).use { dispatcher ->
+            dispatcher.pause()
+            val result = dispatcher.start()
+            result.cancel(true)
+            dispatcher.resume()
+            awaitCondition { dispatcher.snapshot().finishedAtMillis != null }
+            assertEquals(1, dispatcher.snapshot().completed)
+            assertFalse(dispatcher.snapshot().cancelled)
+        }
+    }
+
+    private fun awaitCondition(condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (!condition()) {
+            check(System.nanoTime() < deadline) { "Timed out waiting for dispatcher state" }
+            Thread.sleep(1)
+        }
+    }
+
     @Test fun `connection failure terminates without endlessly replacing workers`() {
         val failing = TransferSessionFactory {
             object : TransferSession {
