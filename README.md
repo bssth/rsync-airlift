@@ -394,6 +394,14 @@ for a graphical terminal window. For SSH, allocate a PTY with `ssh -t`; no X11
 forwarding is needed. Prefer `java -jar` or the installed launcher over Gradle
 `:monitor:run`, which can redirect or interleave terminal I/O.
 
+The monitor builds terminal-independent `MonitorFrame` text runs using its own
+`MonitorColor` palette and `MonitorEvent` input types. `MonitorRenderer`, worker
+layouts and selection logic do not import Lanterna. The JVM
+`LanternaMonitorTerminal` adapter handles keyboard/mouse conversion, display-column
+clipping, terminal resize and buffered COMPLETE/DELTA refreshes. Lanterna remains
+the current backend for both console and optional Swing windows; this separation
+prepares another backend without changing the transfer engine or wire protocol.
+
 The monitor refreshes about every 200 ms and needs at least **64 × 16** characters.
 Worker panels fill vertically before adding columns, are at most **88** characters
 wide, and page when necessary. The overall bar has at most **100** interior cells.
@@ -581,8 +589,7 @@ File content I/O uses `kotlinx-io` 0.7.0 behind a small portable implementation.
 The JVM adapters retain the existing `java.nio.file.Path` and stream APIs, atomic
 temporary-file creation, owner-only connection-file creation, and inventory scans
 without following symbolic links. The connection-file format is unchanged.
-The core uses Kotlin Multiplatform source sets with a JVM target; the monitor
-remains Kotlin/JVM. Native targets have not been added. Java process, socket
+Both core and monitor use Kotlin Multiplatform source sets with a JVM target. Native targets have not been added. Java process, socket
 and terminal APIs are still used on JVM. The `kotlinx-io` filesystem API is experimental.
 
 ```kotlin
@@ -633,10 +640,10 @@ To integrate a monitor, wrap it in `DispatcherMonitorSource`, expose
 `MonitorServer(source, endpoint)`, and/or run `AirliftMonitor(source).run()` from a coroutine.
 The library adapters do not own the dispatcher; close their resources separately.
 
-### Core source layout
+### Multiplatform source layout
 
 `core` applies Kotlin Multiplatform 2.1.21 with only `jvm()` enabled and Java 21.
-`monitor` continues to use the Kotlin/JVM plugin and selects core's JVM variant.
+`monitor` also applies Kotlin Multiplatform with only `jvm()` enabled.
 
 | Source set | Contents |
 | --- | --- |
@@ -644,6 +651,48 @@ The library adapters do not own the dispatcher; close their resources separately
 | `jvmMain` | ProcessBuilder-based launcher, environment/lock bridges, filesystem/time/path adapters and actual factories |
 | `commonTest` | Dispatcher lifecycle with virtual time and fake transports, model/parser tests |
 | `jvmTest` | Parallel execution on JVM, blocking-session cancellation, filesystem and platform tests |
+
+Monitor path parameters, including connection endpoints and file manifests, use
+`kotlinx.io.files.Path`. NIO conversion is confined to JVM filesystem/process
+boundaries (atomic private-file creation, no-follow inventory and redirection).
+Endpoint path construction is shared; obtaining an absolute path uses a small
+platform function and does not require the destination to exist.
+
+File preparation and SSH preflight use suspend APIs. Preflight executes through
+common process contracts, captures a bounded diagnostic tail without temporary
+log files, and inherits terminal I/O only for interactive host-key confirmation.
+That trust-only command bypasses sshpass and removes SSHPASS from its environment.
+
+File preparation uses a suspend API. SSH inventory runs through the shared
+`ProcessLauncher`/`ChildProcess` contracts; NUL/UTF-8 parsing and manifest reading
+live in common code. Stderr is drained concurrently with a bounded diagnostic
+tail, and cancellation closes/reaps the child. JVM supplies the process launcher,
+I/O dispatcher and local no-follow inventory implementation.
+
+The application workflow and demo transfer sessions live in common code.
+Service lifetime uses coroutine completion/cancellation; the JVM entry point only
+bridges main/runBlocking, stderr and process exit. JVM adapters provide the
+socket service/client, shutdown-hook registration and temporary directories.
+
+The monitor client/server and protocol-3 codec live in common code. The server
+uses two coroutine handlers and a bounded queue of 16 waiting connections.
+JVM adapters provide loopback sockets with connect/read timeouts and cancellation
+cleanup; token generation and protected connection-file persistence are separate
+platform functions. Protocol-3 data-stream framing and the properties file format
+remain compatible with existing JVM clients.
+
+Monitor source sets:
+
+| Source set | Contents |
+| --- | --- |
+| `commonMain` | Monitor source contract, model, renderer, worker grid, progress/rate calculations, frame/color/event types, terminal loop, CLI parsing, file selection/batching/directory collapse, confirmation and SSH preflight policies |
+| `jvmMain` | Lanterna adapter, native console/Swing setup, CLI entry point, socket service/client, process execution, filesystem inventory, console/Swing prompts and actual platform factories |
+| `commonTest` | Portable formatting, progress labels, breakdown and rendering/input checks |
+| `jvmTest` | Virtual-terminal rendering, transport, CLI and platform integration tests |
+
+`monitor:jvmJar` and `monitor:jvmTest` build and test the JVM variant;
+`:monitor:jar`, `:monitor:test`, `:monitor:run`, `:monitor:installDist` and
+`:monitor:jarBundle` remain available. No Native target is configured.
 
 The core JVM artifact is built by `:core:jvmJar`; tests run with `:core:jvmTest`.
 `:core:jar` and `:core:test` remain compatibility aliases. The deployed filenames,

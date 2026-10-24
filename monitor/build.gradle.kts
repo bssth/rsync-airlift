@@ -2,43 +2,57 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
 plugins {
-    kotlin("jvm")
-    application
+    kotlin("multiplatform")
+    distribution
 }
 
-kotlin { jvmToolchain(21) }
-
-dependencies {
-    implementation(project(":core"))
-    implementation("com.googlecode.lanterna:lanterna:3.1.3")
-    implementation("org.jline:jline-terminal:3.29.0")
-    runtimeOnly("org.jline:jline-terminal-jni:3.29.0")
-    testImplementation(kotlin("test-junit5"))
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
+kotlin {
+    jvmToolchain(21)
+    jvm { testRuns["test"].executionTask.configure { useJUnitPlatform() } }
+    sourceSets {
+        commonMain.dependencies { api(project(":core")) }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+        }
+        jvmMain.dependencies {
+            implementation("com.googlecode.lanterna:lanterna:3.1.3")
+            implementation("org.jline:jline-terminal:3.29.0")
+            runtimeOnly("org.jline:jline-terminal-jni:3.29.0")
+        }
+        jvmTest.dependencies {
+            implementation(kotlin("test-junit5"))
+            runtimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
+        }
+    }
 }
 
-application {
-    mainClass.set("iris.tools.airlift.monitor.MainKt")
-    applicationName = "rsync-airlift-monitor"
+val entryPointClass = "iris.tools.airlift.monitor.MainKt"
+val jvmMainCompilation = kotlin.targets.getByName("jvm").compilations.getByName("main")
+tasks.register<JavaExec>("run") {
+    group = "application"
+    mainClass.set(entryPointClass)
+    classpath = files(jvmMainCompilation.output.allOutputs, jvmMainCompilation.runtimeDependencyFiles)
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) })
+    standardInput = System.`in`
 }
-
-tasks.test { useJUnitPlatform() }
-tasks.named<JavaExec>("run") { standardInput = System.`in` }
+tasks.register("test") { group = "verification"; dependsOn("jvmTest") }
+tasks.register("jar") { group = "build"; dependsOn("jvmJar") }
 
 // A small executable JAR with adjacent dependencies; no unpacking or shading.
-val runtimeLibraries = configurations.runtimeClasspath
+val runtimeLibraries = configurations.named("jvmRuntimeClasspath")
 val coreJar = project(":core").tasks.named<Jar>("jvmJar")
 val externalLibraries = runtimeLibraries.map { libraries -> libraries.filter { it != coreJar.get().archiveFile.get().asFile } }
 val manifestClasspath = externalLibraries.map { libraries ->
     (listOf(coreJar.get().archiveFileName.get()) + libraries.sortedBy { it.name }.map { "lib/${it.name}" }).joinToString(" ")
 }
-val executableJar = tasks.named<Jar>("jar") {
+val executableJar = tasks.named<Jar>("jvmJar") {
     // Keep monitor and core separate; resolve both core and third-party libs via the manifest.
     archiveFileName.set("rsync-airlift.jar")
     inputs.property("manifestClasspath", manifestClasspath)
     doFirst {
         manifest.attributes(
-            "Main-Class" to application.mainClass.get(),
+            "Main-Class" to entryPointClass,
             "Class-Path" to manifestClasspath.get(),
         )
     }
@@ -83,3 +97,20 @@ val jarBundleZip = tasks.register<Zip>("jarBundleZip") {
 }
 
 tasks.named("assemble") { dependsOn(jarBundleZip) }
+
+val startScripts = tasks.register<CreateStartScripts>("startScripts") {
+    applicationName = "rsync-airlift-monitor"
+    mainClass.set(entryPointClass)
+    classpath = files(executableJar, runtimeLibraries)
+    outputDir = layout.buildDirectory.dir("scripts").get().asFile
+}
+distributions {
+    main {
+        distributionBaseName.set("rsync-airlift-monitor")
+        contents {
+            from(startScripts) { into("bin"); filePermissions { unix("rwxr-xr-x") } }
+            from(executableJar) { into("lib") }
+            from(runtimeLibraries) { into("lib") }
+        }
+    }
+}
