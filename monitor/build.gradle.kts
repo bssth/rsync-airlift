@@ -27,7 +27,7 @@ tasks.named<JavaExec>("run") { standardInput = System.`in` }
 
 // A small executable JAR with adjacent dependencies; no unpacking or shading.
 val runtimeLibraries = configurations.runtimeClasspath
-val coreJar = project(":core").tasks.named<Jar>("jar")
+val coreJar = project(":core").tasks.named<Jar>("jvmJar")
 val externalLibraries = runtimeLibraries.map { libraries -> libraries.filter { it != coreJar.get().archiveFile.get().asFile } }
 val manifestClasspath = externalLibraries.map { libraries ->
     (listOf(coreJar.get().archiveFileName.get()) + libraries.sortedBy { it.name }.map { "lib/${it.name}" }).joinToString(" ")

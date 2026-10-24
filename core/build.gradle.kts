@@ -1,25 +1,38 @@
 plugins {
-    kotlin("jvm")
-    `java-library`
+    kotlin("multiplatform")
 }
 
-kotlin { jvmToolchain(21) }
-
-dependencies {
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-io-core:0.7.0")
-    testImplementation(kotlin("test-junit5"))
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
+kotlin {
+    jvmToolchain(21)
+    jvm {
+        testRuns["test"].executionTask.configure { useJUnitPlatform() }
+    }
+    sourceSets {
+        commonMain.dependencies {
+            api("org.jetbrains.kotlinx:kotlinx-io-core:0.7.0")
+            api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+        }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+        }
+        jvmTest.dependencies {
+            implementation(kotlin("test-junit5"))
+            runtimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
+        }
+    }
 }
 
-tasks.test { useJUnitPlatform() }
-
-tasks.named<Jar>("jar") {
+tasks.named<Jar>("jvmJar") {
     archiveFileName.set("rsync-airlift-core.jar")
-    val libraries = configurations.runtimeClasspath
+    val libraries = configurations.named("jvmRuntimeClasspath")
     inputs.property("manifestClasspath", libraries.map { files -> files.files.sortedBy { it.name }.joinToString(" ") { "lib/${it.name}" } })
     doFirst {
         manifest.attributes("Class-Path" to libraries.get().files.sortedBy { it.name }
             .joinToString(" ") { "lib/${it.name}" })
     }
 }
+
+// Keep existing build commands working; KMP's actual tasks are jvmJar/jvmTest.
+tasks.register("jar") { group = "build"; dependsOn("jvmJar") }
+tasks.register("test") { group = "verification"; dependsOn("jvmTest") }

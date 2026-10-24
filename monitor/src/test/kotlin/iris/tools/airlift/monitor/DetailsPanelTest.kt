@@ -12,15 +12,15 @@ class DetailsPanelTest {
         val log = Files.createTempFile("airlift-details-test-", ".log")
         Files.writeString(log, "DEMO logical progress: 40%")
         val tasks = (1..2).map { id -> TaskState(TransferTask("folder/file-$id.bin", 1048576), TaskStatus.SUCCEEDED,
-            attempts = 1, progress = TransferProgress(1048576, 1024.0, null, 100, 524288, 524288), logFile = log) }
+            attempts = 1, progress = TransferProgress(1048576, 1024.0, null, 100, 524288, 524288), logFile = log.toPortablePath()) }
         val snapshot = AirliftSnapshot(tasks, tasks.mapIndexed { i, t -> WorkerState(i + 1, WorkerStatus.FINISHED, t.task.id) }, false, false)
         val source = object : MonitorSource {
             override val from = "user@host:/source"
             override val to = "/destination"
-            override fun snapshot() = snapshot
-            override fun pause() {}
-            override fun resume() {}
-            override fun setWorkerCount(count: Int) {}
+            override suspend fun snapshot() = snapshot
+            override suspend fun pause() {}
+            override suspend fun resume() {}
+            override suspend fun setWorkerCount(count: Int) {}
         }
         TerminalScreen(DefaultVirtualTerminal(TerminalSize(100, 28))).use { screen ->
             screen.startScreen()

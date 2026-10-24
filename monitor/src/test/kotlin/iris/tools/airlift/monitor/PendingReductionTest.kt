@@ -8,11 +8,11 @@ import iris.tools.airlift.*
 import kotlin.test.*
 
 class PendingReductionTest {
-    private fun snapshot(target: Int) = AirliftSnapshot(emptyList(), (1..4).map {
+    private suspend fun snapshot(target: Int) = AirliftSnapshot(emptyList(), (1..4).map {
         WorkerState(it, WorkerStatus.TRANSFERRING)
     }, false, false, target)
 
-    @Test fun `last N rows indicate quota without selecting which workers stop`() {
+    @Test fun `last N rows indicate quota without selecting which workers stop`(): Unit = kotlinx.coroutines.runBlocking {
         val model = MonitorModel()
         assertEquals(listOf("worker-3", "worker-4"), model.rows(snapshot(2)).filter { it.pendingReduction }.map { it.key })
         // Worker 1 finishes first and disappears; only the last remaining row stays orange.
@@ -24,13 +24,13 @@ class PendingReductionTest {
         assertTrue(model.rows(snapshot(1).copy(workers = listOf(WorkerState(1, WorkerStatus.FINISHED)))).none { it.pendingReduction })
     }
 
-    @Test fun `orange background appears immediately and clears after increasing target`() {
+    @Test fun `orange background appears immediately and clears after increasing target`(): Unit = kotlinx.coroutines.runBlocking {
         var value = snapshot(2)
         val source = object : MonitorSource {
-            override fun snapshot() = value
-            override fun pause() {}
-            override fun resume() {}
-            override fun setWorkerCount(count: Int) { value = value.copy(targetWorkers = count) }
+            override suspend fun snapshot() = value
+            override suspend fun pause() {}
+            override suspend fun resume() {}
+            override suspend fun setWorkerCount(count: Int) { value = value.copy(targetWorkers = count) }
         }
         TerminalScreen(DefaultVirtualTerminal(TerminalSize(80, 24))).use { screen ->
             screen.startScreen()

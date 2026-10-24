@@ -9,7 +9,7 @@ class MultipleSourcesTest {
     private fun plan(paths: List<String>, manifest: Path? = null): PreparedTransfer {
         val roots = TransferRoots.parseSources(paths)
         return prepareSources(AirliftConfig(roots.first().host, roots.first().remoteRoot,
-            Path.of(sourceBase(roots.first().localRoot.replace('\\', '/'))), direction = roots.first().direction), roots, manifest)
+            Path.of(sourceBase(roots.first().localRoot.replace('\\', '/'))).toPortablePath(), direction = roots.first().direction), roots, manifest)
     }
 
     @Test fun `expanded local masks accept multiple files sorted by size with individual source roots`() {

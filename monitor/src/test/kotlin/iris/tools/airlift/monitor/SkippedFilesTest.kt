@@ -8,24 +8,24 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.*
 
 class SkippedFilesTest {
-    @Test fun `successful rsync with zero statistics finishes full file progress and counts as matched`() {
+    @Test fun `successful rsync with zero statistics finishes full file progress and counts as matched`(): Unit = kotlinx.coroutines.runBlocking {
         val root = Files.createTempDirectory("airlift-skipped-")
         try {
             val sessions = TransferSessionFactory {
                 object : TransferSession {
-                    override fun connect() {}
-                    override fun close() {}
-                    override fun transfer(task: TransferTask, logFile: Path, progress: (TransferProgress) -> Unit): Int {
+                    override suspend fun connect() {}
+                    override suspend fun close() {}
+                    override suspend fun transfer(task: TransferTask, logFile: kotlinx.io.files.Path, progress: suspend (TransferProgress) -> Unit): Int {
                         val parser = RsyncOutputParser()
                         // Typical --stats for an unchanged file: no progress records.
-                        listOf("Literal data: 0 bytes", "Matched data: 0 bytes").forEach { parser.parse(it)?.let(progress) }
+                        listOf("Literal data: 0 bytes", "Matched data: 0 bytes").forEach { parser.parse(it)?.let { progress(it) } }
                         return 0
                     }
                 }
             }
-            AirliftDispatcher(AirliftConfig("user@host", "/source", root, workers = 1, logDirectory = root.resolve("logs")),
+            AirliftDispatcher(AirliftConfig("user@host", "/source", root.toPortablePath(), workers = 1, logDirectory = root.resolve("logs").toPortablePath()),
                 listOf(TransferTask("unchanged", 1024)), sessions).use { dispatcher ->
-                val result = dispatcher.start().get(5, TimeUnit.SECONDS)
+                val result = run { dispatcher.start(); kotlinx.coroutines.withTimeout(5000) { dispatcher.awaitCompletion() } }
                 assertEquals(1, result.completed)
                 assertEquals(0, result.failed)
                 assertEquals(TaskStatus.SUCCEEDED, result.tasks.single().status)
@@ -42,7 +42,7 @@ class SkippedFilesTest {
         } finally { root.toFile().deleteRecursively() }
     }
 
-    @Test fun `partial statistics and failures are not silently classified as matched`() {
+    @Test fun `partial statistics and failures are not silently classified as matched`(): Unit = kotlinx.coroutines.runBlocking {
         val task = TransferTask("file", 100)
         for (state in listOf(
             TaskState(task, TaskStatus.RUNNING, progress = TransferProgress(0, null, null, matchedBytes = 0, literalBytes = 0)),

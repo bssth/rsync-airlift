@@ -8,16 +8,16 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.*
 
 class BatchExecutionTest {
-    @Test fun `one batch invokes one session transfer counts files and includes skipped bytes in matched`() {
+    @Test fun `one batch invokes one session transfer counts files and includes skipped bytes in matched`(): Unit = kotlinx.coroutines.runBlocking {
         val root = Files.createTempDirectory("airlift-batch-")
         try {
             val task = TransferTask("a", 1000, files = listOf("a", "b", "c"))
             var calls = 0
             val factory = TransferSessionFactory {
                 object : TransferSession {
-                    override fun connect() {}
-                    override fun close() {}
-                    override fun transfer(task: TransferTask, logFile: Path, progress: (TransferProgress) -> Unit): Int {
+                    override suspend fun connect() {}
+                    override suspend fun close() {}
+                    override suspend fun transfer(task: TransferTask, logFile: kotlinx.io.files.Path, progress: suspend (TransferProgress) -> Unit): Int {
                         calls++
                         assertEquals(listOf("a", "b", "c"), task.files)
                         progress(TransferProgress(500, 100.0, 0, matchedBytes = 400, literalBytes = 100, currentFile = "b", transferredFiles = 1))
@@ -25,8 +25,8 @@ class BatchExecutionTest {
                     }
                 }
             }
-            AirliftDispatcher(AirliftConfig("user@host", "/source", root, workers = 1, logDirectory = root.resolve("logs")), listOf(task), factory).use { dispatcher ->
-                val final = dispatcher.start().get(5, TimeUnit.SECONDS)
+            AirliftDispatcher(AirliftConfig("user@host", "/source", root.toPortablePath(), workers = 1, logDirectory = root.resolve("logs").toPortablePath()), listOf(task), factory).use { dispatcher ->
+                val final = run { dispatcher.start(); kotlinx.coroutines.withTimeout(5000) { dispatcher.awaitCompletion() } }
                 assertEquals(1, calls)
                 assertEquals(3, final.completed)
                 assertEquals(900L, final.tasks.single().progress?.matchedBytes)
@@ -36,10 +36,10 @@ class BatchExecutionTest {
                 assertTrue(parts.any { it.color == TextColor.ANSI.GREEN && it.text.contains('|') })
                 val endpoint = root.resolve("connection")
                 val source = object : MonitorSource {
-                    override fun snapshot() = final
-                    override fun pause() {}
-                    override fun resume() {}
-                    override fun setWorkerCount(count: Int) {}
+                    override suspend fun snapshot() = final
+                    override suspend fun pause() {}
+                    override suspend fun resume() {}
+                    override suspend fun setWorkerCount(count: Int) {}
                 }
                 MonitorServer(source, endpoint).use {
                     val remote = RemoteMonitorSource(endpoint).snapshot()

@@ -13,10 +13,10 @@ class RunAverageTest {
             progress = TransferProgress(524288, 1048576.0, 1), progressUpdatedAtNanos = System.nanoTime())
         val running = AirliftSnapshot(listOf(task), emptyList(), false, false, startedAtMillis = started)
         val source = object : MonitorSource {
-            override fun snapshot() = running
-            override fun pause() {}
-            override fun resume() {}
-            override fun setWorkerCount(count: Int) {}
+            override suspend fun snapshot() = running
+            override suspend fun pause() {}
+            override suspend fun resume() {}
+            override suspend fun setWorkerCount(count: Int) {}
         }
         TerminalScreen(DefaultVirtualTerminal(TerminalSize(120, 24))).use { screen ->
             screen.startScreen()

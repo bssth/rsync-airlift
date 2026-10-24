@@ -24,7 +24,7 @@ internal fun prepareSources(config: AirliftConfig, roots: List<TransferRoots>, m
             else Path.of(raw).toAbsolutePath().toString().replace('\\', '/') + if (raw.endsWith('/')) "/" else ""
         }
         val perConfig = if (config.direction == TransferDirection.DOWNLOAD) config.copy(remoteRoot = source)
-            else config.copy(localRoot = Path.of(sourceBase(source)))
+            else config.copy(localRoot = Path.of(sourceBase(source)).toPortablePath())
         val plan = prepareTransfer(perConfig, manifest, nulSeparated, source, allowMissing = true)
         var sourceRoot = if (config.direction == TransferDirection.DOWNLOAD) plan.config.remoteRoot else plan.config.localRoot.toString().replace('\\', '/')
         // A directory argument without a trailing slash retains its directory name, as in rsync.
@@ -80,7 +80,7 @@ internal fun prepareTransfer(
         TransferTask(path, listing.sizes[path] ?: error("Source file is missing or is not a file: $path"))
     }.sortedWith(compareByDescending<TransferTask> { it.size }.thenBy { it.path })
     val preparedConfig = if (config.direction == TransferDirection.DOWNLOAD) config.copy(remoteRoot = root)
-        else config.copy(localRoot = Path.of(root))
+        else config.copy(localRoot = Path.of(root).toPortablePath())
     return PreparedTransfer(preparedConfig, tasks, if (listing.singleFile) emptyList() else listOf(
         DirectoryInventory(null, "", listing.sizes.keys, listing.directories, listing.otherEntries)))
 }

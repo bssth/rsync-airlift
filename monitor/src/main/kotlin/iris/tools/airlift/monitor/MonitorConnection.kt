@@ -53,19 +53,19 @@ class MonitorServer(private val source: MonitorSource, val endpoint: Path) : Aut
         }, "airlift-monitor-server").apply { isDaemon = true; start() }
     }
 
-    private fun handle(socket: Socket) {
+    private fun handle(socket: Socket) = kotlinx.coroutines.runBlocking {
         runCatching {
             socket.use {
                 it.soTimeout = 3000
                 val input = DataInputStream(it.getInputStream())
                 val output = DataOutputStream(it.getOutputStream())
                 val version = input.readInt()
-                if (input.readUTF() != token) return
+                if (input.readUTF() != token) return@runCatching
                 if (version != 3) {
                     output.writeBoolean(false)
                     Wire.text(output, "Monitor protocol changed. Restart dispatcher and monitor together.")
                     output.flush()
-                    return
+                    return@runCatching
                 }
                 try {
                     when (input.readUTF()) {
@@ -122,10 +122,10 @@ class RemoteMonitorSource(endpoint: Path) : MonitorSource {
         }
     }
 
-    override fun snapshot() = request("snapshot")
-    override fun pause() { request("pause") }
-    override fun resume() { request("resume") }
-    override fun setWorkerCount(count: Int) { request("workers", count) }
+    override suspend fun snapshot() = request("snapshot")
+    override suspend fun pause() { request("pause") }
+    override suspend fun resume() { request("resume") }
+    override suspend fun setWorkerCount(count: Int) { request("workers", count) }
 }
 
 /** Explicit versioned data format; never deserializes Java objects or executable types. */
@@ -182,7 +182,7 @@ private object Wire {
             val path = text(input); val size = number(input); val id = text(input)
             val task = TransferTask(path, size, id, files = List(count(input)) { text(input) })
             val status = TaskStatus.valueOf(text(input)); val attempts = input.readInt()
-            val error = nullable(input); val log = nullable(input)?.let(Path::of)
+            val error = nullable(input); val log = nullable(input)?.let { kotlinx.io.files.Path(it) }
             val updated = number(input)?.let { System.nanoTime() - it }
             val progress = if (input.readBoolean()) TransferProgress(input.readLong(),
                 if (input.readBoolean()) input.readDouble() else null, number(input), number(input)?.toInt(), number(input), number(input), nullable(input), number(input)?.toInt()) else null

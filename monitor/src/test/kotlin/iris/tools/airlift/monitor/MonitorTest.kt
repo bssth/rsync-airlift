@@ -24,13 +24,13 @@ class MonitorTest {
             listOf(WorkerState(1, WorkerStatus.TRANSFERRING, "folder/a.bin")),
             false, false, 2, System.currentTimeMillis(),
         )
-        override fun snapshot() = value
-        override fun pause() { value = value.copy(paused = true) }
-        override fun resume() { value = value.copy(paused = false) }
-        override fun setWorkerCount(count: Int) { value = value.copy(targetWorkers = count) }
+        override suspend fun snapshot() = value
+        override suspend fun pause() { value = value.copy(paused = true) }
+        override suspend fun resume() { value = value.copy(paused = false) }
+        override suspend fun setWorkerCount(count: Int) { value = value.copy(targetWorkers = count) }
     }
 
-    @Test fun `controls pause resize and switch views`() {
+    @Test fun `controls pause resize and switch views`(): Unit = kotlinx.coroutines.runBlocking {
         val source = Source()
         val model = MonitorModel()
         model.handle('p', source); assertTrue(source.value.paused)
@@ -41,7 +41,7 @@ class MonitorTest {
         model.handle('3', source); assertTrue(model.rows(source.value).single().text.contains("permission denied"))
     }
 
-    @Test fun `completed runs reject no UI commands and stale speed is unknown`() {
+    @Test fun `completed runs reject no UI commands and stale speed is unknown`(): Unit = kotlinx.coroutines.runBlocking {
         val source = Source()
         source.value = source.value.copy(finishedAtMillis = System.currentTimeMillis())
         MonitorModel().handle('+', source)
@@ -49,7 +49,7 @@ class MonitorTest {
         assertNull(MonitorModel.freshRate(source.value.tasks.first(), System.nanoTime() + 4_000_000_000))
     }
 
-    @Test fun `render workers queue errors and narrow terminal using real Lanterna screen`() {
+    @Test fun `render workers queue errors and narrow terminal using real Lanterna screen`(): Unit = kotlinx.coroutines.runBlocking {
         val source = Source()
         val terminal = DefaultVirtualTerminal(TerminalSize(110, 28))
         TerminalScreen(terminal).use { screen ->
@@ -101,7 +101,7 @@ class MonitorTest {
         }
     }
 
-    @Test fun `separate client reads snapshot controls server and reconnects`() {
+    @Test fun `separate client reads snapshot controls server and reconnects`(): Unit = kotlinx.coroutines.runBlocking {
         val endpoint = Files.createTempDirectory("airlift-monitor-test-").resolve("connection")
         val source = Source()
         MonitorServer(source, endpoint).use {
@@ -125,7 +125,7 @@ class MonitorTest {
         assertFalse(Files.exists(endpoint))
     }
 
-    @Test fun `Q detaches panel without pausing or cancelling source`() {
+    @Test fun `Q detaches panel without pausing or cancelling source`(): Unit = kotlinx.coroutines.runBlocking {
         val source = Source()
         val terminal = DefaultVirtualTerminal(TerminalSize(100, 28))
         terminal.addInput(KeyStroke('q', false, false))
@@ -135,12 +135,12 @@ class MonitorTest {
         assertNull(source.value.finishedAtMillis)
     }
 
-    @Test fun `worker percentage uses rsync progress when caller omits size`() {
+    @Test fun `worker percentage uses rsync progress when caller omits size`(): Unit = kotlinx.coroutines.runBlocking {
         val progress = ProgressParser.parse(" 1,234  12%  1.50MB/s  0:01:02")!!
         assertEquals(" 12%", MonitorModel.percent(TaskState(TransferTask("unknown-size"), TaskStatus.RUNNING, progress = progress)))
     }
 
-    @Test fun `demo defaults use independent run directories and preserve explicit endpoint`() {
+    @Test fun `demo defaults use independent run directories and preserve explicit endpoint`(): Unit = kotlinx.coroutines.runBlocking {
         val first = Files.createTempDirectory("demo-run-")
         val second = Files.createTempDirectory("demo-run-")
         assertNotEquals(monitorEndpoint(null, first), monitorEndpoint(null, second))
@@ -148,7 +148,7 @@ class MonitorTest {
         assertEquals(first.resolve("custom").toAbsolutePath(), monitorEndpoint(first.resolve("custom").toString(), second))
     }
 
-    @Test fun `duplicate endpoint leaves original live server intact and reports recovery options`() {
+    @Test fun `duplicate endpoint leaves original live server intact and reports recovery options`(): Unit = kotlinx.coroutines.runBlocking {
         val endpoint = Files.createTempDirectory("airlift-conflict-test-").resolve("connection")
         MonitorServer(Source(), endpoint).use {
             val original = Files.readAllBytes(endpoint)
@@ -160,7 +160,7 @@ class MonitorTest {
         }
     }
 
-    @Test fun `buffered frames do not clear terminal and unchanged frames write no characters`() {
+    @Test fun `buffered frames do not clear terminal and unchanged frames write no characters`(): Unit = kotlinx.coroutines.runBlocking {
         var clears = 0
         var characters = 0
         val terminal = object : DefaultVirtualTerminal(TerminalSize(110, 28)) {

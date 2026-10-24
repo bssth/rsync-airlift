@@ -13,10 +13,10 @@ class BatchDetailsTest {
             currentFile = "f52", transferredFiles = 6))
         val snapshot = AirliftSnapshot(listOf(state), listOf(WorkerState(4, WorkerStatus.TRANSFERRING, task.id)), false, false)
         val source = object : MonitorSource {
-            override fun snapshot() = snapshot
-            override fun pause() {}
-            override fun resume() {}
-            override fun setWorkerCount(count: Int) {}
+            override suspend fun snapshot() = snapshot
+            override suspend fun pause() {}
+            override suspend fun resume() {}
+            override suspend fun setWorkerCount(count: Int) {}
         }
         TerminalScreen(DefaultVirtualTerminal(TerminalSize(140, 24))).use { screen ->
             screen.startScreen()

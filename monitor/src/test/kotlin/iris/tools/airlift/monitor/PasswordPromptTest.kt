@@ -5,7 +5,7 @@ import java.nio.file.Path
 import kotlin.test.*
 
 class PasswordPromptTest {
-    private val config = AirliftConfig("user@host", "/source", Path.of("dest"))
+    private val config = AirliftConfig("user@host", "/source", kotlinx.io.files.Path("dest"))
     private val denied = SshCheckResult(255, "Permission denied (publickey,password).")
 
     @Test fun `key failure asks once and retries using password without arguments containing it`() {

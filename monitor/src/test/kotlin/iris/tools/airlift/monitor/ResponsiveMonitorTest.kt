@@ -61,10 +61,10 @@ class ResponsiveMonitorTest {
         val snapshot = AirliftSnapshot(tasks, tasks.mapIndexed { i, task -> WorkerState(i + 1,
             if (i < 4) WorkerStatus.FINISHED else WorkerStatus.TRANSFERRING, task.task.id) }, false, false, 16)
         val source = object : MonitorSource {
-            override fun snapshot() = snapshot
-            override fun pause() {}
-            override fun resume() {}
-            override fun setWorkerCount(count: Int) {}
+            override suspend fun snapshot() = snapshot
+            override suspend fun pause() {}
+            override suspend fun resume() {}
+            override suspend fun setWorkerCount(count: Int) {}
         }
         val terminal = DefaultVirtualTerminal(TerminalSize(220, 28))
         TerminalScreen(terminal).use { screen ->

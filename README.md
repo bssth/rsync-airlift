@@ -100,7 +100,7 @@ file data and failures. `Matched` includes unchanged files that rsync skipped;
 it does not imply that every byte was checksum-verified. `Processed` and the
 displayed speeds describe logical file processing, not measured network traffic.
 
-The project has two Kotlin/JVM modules:
+The project has two modules, currently targeting JVM:
 
 - **`core`** accepts a prepared list of files, owns the queue, and manages worker
   connections. Applications can supply their own selection and ordering.
@@ -525,28 +525,75 @@ entry point. It accepts prepared jobs and preserves their order; it does not
 discover files, sort, create batches automatically, or ask confirmation/password
 questions. The monitor CLI provides those preparation and interactive features.
 
-Workers run as coroutines in an owned `SupervisorJob` on `Dispatchers.IO`.
-Pause/resume notifications and retry delays suspend without blocking a thread.
-SSH/process I/O remains blocking on the I/O dispatcher; short state locks keep
-the synchronous controls, snapshots and progress callbacks consistent.
-`start()` still returns a `CompletableFuture` for JVM callers. Closing the
-dispatcher cancels its coroutine scope and terminates owned child processes.
+`AirliftDispatcher`, its configuration, task states and snapshots live in
+`commonMain`. The single dispatcher uses an owned `SupervisorJob`, a coroutine
+`Mutex`, and suspend controls: `start()`, `snapshot()`, `pause()`, `resume()`,
+`setWorkerCount()`, `awaitCompletion()` and `close()`. There is no JVM dispatcher
+wrapper or `CompletableFuture` API. Paths in the shared models use
+`kotlinx.io.files.Path`.
+
+`SshSessionFactory` and the ControlMaster/rsync session live in `commonMain` too.
+`TransferSessionFactory` remains injectable for alternative transports. SSH uses
+`ProcessLauncher` rather than Java process APIs; authentication, file operations,
+clocks and absolute-path normalization are supplied through platform interfaces.
+Default implementations are selected by `expect`/`actual` factories.
+No transfer or resource cleanup runs under the dispatcher's state mutex. Closing
+cancels the run and unblocks sessions; `awaitCompletion()` waits for worker cleanup.
+
+The process API consists of `ProcessSpec`, `ProcessLauncher`, `ChildProcess` and
+suspend byte pipes. A specification carries literal arguments, environment
+changes, working directory and pipe/file/inherited redirects. `awaitExit()`
+suspends; its timed overload returns null on timeout without killing the child.
+Owners always call `close()` to terminate/reap the child and release its pipes.
+Cancelling pipe I/O aborts the child so a blocked OS read/write can be released.
+Environment values are excluded from specification descriptions.
+
+`JvmProcessLauncher` implements startup and blocking pipe I/O on `Dispatchers.IO`
+and waits through Java's `Process.onExit()`. Its cleanup is idempotent, including
+concurrent close calls. The common SSH session streams input and output
+concurrently to avoid deadlocks on large file lists; it parses CR/LF records even
+when UTF-8 characters span input chunks. It does not create threads or use Java
+streams itself.
+
+`SshAuthentication` also lives in `commonMain`: key/password selection, password
+replacement and process-environment preparation share one synchronization lock.
+All password reads and writes use that lock; no volatile field or JVM annotation
+is needed. Only the environment lookup, synchronous lock implementation and
+Java `ProcessBuilder` interop stay in JVM adapters. Password buffers are copied
+on input and cleared on replacement/shutdown; child-process descriptions redact
+environment values.
+
+The monitor uses the same suspend API and shared models directly. `runBlocking`
+is used only at JVM CLI/thread entry points, not in a dispatcher compatibility
+layer. The command-line workflow and monitor wire protocol remain unchanged.
+
+`DefaultSshFiles` is shared too: directory creation, diagnostic text reads and
+buffered binary logs call `FileContent`/`kotlinx-io` directly, without Java stream
+round-trips. `FileContent` serializes filesystem entry points with a shared
+platform lock; independent streams do not hold that lock while transferring data.
+Only atomic private temporary-directory creation and no-follow recursive cleanup
+remain narrow platform operations. kotlinx-io 0.7.0 does not expose equivalent
+primitives with those guarantees, so they are not replaced by a check-then-create
+or a symlink-following walk. Cancellation during log/directory creation retains
+ownership long enough to release the newly created resource.
 
 File content I/O uses `kotlinx-io` 0.7.0 behind a small portable implementation.
 The JVM adapters retain the existing `java.nio.file.Path` and stream APIs, atomic
 temporary-file creation, owner-only connection-file creation, and inventory scans
 without following symbolic links. The connection-file format is unchanged.
-This prepares a future KMP split; the project still targets JVM and uses Java
-process, socket and terminal APIs. The `kotlinx-io` filesystem API is experimental.
+The core uses Kotlin Multiplatform source sets with a JVM target; the monitor
+remains Kotlin/JVM. Native targets have not been added. Java process, socket
+and terminal APIs are still used on JVM. The `kotlinx-io` filesystem API is experimental.
 
 ```kotlin
 import iris.tools.airlift.*
-import java.nio.file.Path
+import kotlinx.io.files.Path
+import kotlinx.coroutines.runBlocking
 
 val config = AirliftConfig(
     host = "user@source-server",
     remoteRoot = "/srv/source",
-    localRoot = Path.of("/srv/destination"),
+    localRoot = Path("/srv/destination"),
     workers = 8,
     maxAttempts = 2,
     rsyncOptions = "-av --partial",
@@ -560,10 +607,16 @@ val jobs = listOf(
     ),
 )
 
-AirliftDispatcher(config, jobs).use { dispatcher ->
-    val result = dispatcher.start().get()
-    check(result.failed == 0 && !result.cancelled)
-    // Another thread may poll snapshot(), pause(), resume(), or setWorkerCount(4).
+runBlocking {
+    val dispatcher = AirliftDispatcher(config, jobs)
+    try {
+        dispatcher.start()
+        val result = dispatcher.awaitCompletion()
+        check(result.failed == 0 && !result.cancelled)
+        // Another coroutine may call snapshot(), pause(), resume(), or setWorkerCount(4).
+    } finally {
+        dispatcher.close()
+    }
 }
 ```
 
@@ -577,8 +630,26 @@ the caller is responsible for establishing full directory coverage.
 
 Closing the dispatcher cancels pending work and terminates its child processes.
 To integrate a monitor, wrap it in `DispatcherMonitorSource`, expose
-`MonitorServer(source, endpoint)`, and/or run `AirliftMonitor(source).run()`.
+`MonitorServer(source, endpoint)`, and/or run `AirliftMonitor(source).run()` from a coroutine.
 The library adapters do not own the dispatcher; close their resources separately.
+
+### Core source layout
+
+`core` applies Kotlin Multiplatform 2.1.21 with only `jvm()` enabled and Java 21.
+`monitor` continues to use the Kotlin/JVM plugin and selects core's JVM variant.
+
+| Source set | Contents |
+| --- | --- |
+| `commonMain` | Dispatcher/models, SSH ControlMaster session, process/pipe interfaces, rsync command builder/parsers, file primitives |
+| `jvmMain` | ProcessBuilder-based launcher, environment/lock bridges, filesystem/time/path adapters and actual factories |
+| `commonTest` | Dispatcher lifecycle with virtual time and fake transports, model/parser tests |
+| `jvmTest` | Parallel execution on JVM, blocking-session cancellation, filesystem and platform tests |
+
+The core JVM artifact is built by `:core:jvmJar`; tests run with `:core:jvmTest`.
+`:core:jar` and `:core:test` remain compatibility aliases. The deployed filenames,
+manifest classpaths and monitor connection protocol are unchanged. There is no
+Native target yet. A Native build needs implementations of the process launcher/pipes, authentication, SSH files, log
+store, clock and path contracts; the monitor still depends on JVM socket/terminal APIs.
 
 ## Logs, resuming and consistency
 

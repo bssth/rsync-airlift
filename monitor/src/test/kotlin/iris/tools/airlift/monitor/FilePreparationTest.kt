@@ -7,7 +7,7 @@ import kotlin.test.*
 
 class FilePreparationTest {
     private fun config(root: Path, direction: TransferDirection = TransferDirection.UPLOAD) =
-        AirliftConfig("user@host", "/source/", root, direction = direction)
+        AirliftConfig("user@host", "/source/", root.toPortablePath(), direction = direction)
 
     @Test fun `local discovery measures all files and schedules largest first`() {
         val root = Files.createTempDirectory("airlift-plan-")
@@ -31,7 +31,7 @@ class FilePreparationTest {
             Files.writeString(manifest, "a.MYD\r\nb.MYI\r\na.MYD\r\n")
             val plan = prepareTransfer(config(root), manifest, source = "$root/*.MYD".replace('\\', '/'))
             assertEquals(listOf("b.MYI", "a.MYD"), plan.tasks.map { it.path })
-            assertEquals(root, plan.config.localRoot)
+            assertEquals(root.toPortablePath(), plan.config.localRoot)
         } finally { root.toFile().deleteRecursively() }
     }
 

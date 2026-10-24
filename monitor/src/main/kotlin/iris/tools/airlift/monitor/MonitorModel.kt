@@ -73,7 +73,7 @@ class MonitorModel {
         }
     }
 
-    fun handle(command: Char, source: MonitorSource) {
+    suspend fun handle(command: Char, source: MonitorSource) {
         val snapshot = source.snapshot()
         // A failed connection leaves targetWorkers above the live pool. Do not
         // backfill that entire gap when the user asks for a single extra worker.

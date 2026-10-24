@@ -13,10 +13,10 @@ class MouseMonitorTest {
     private val tasks = (1..40).map { TaskState(TransferTask("file-$it", 100), TaskStatus.RUNNING) }
     private val snapshot = AirliftSnapshot(tasks, tasks.mapIndexed { i, task -> WorkerState(i + 1, WorkerStatus.TRANSFERRING, task.task.id) }, false, false, 40)
     private val source = object : MonitorSource {
-        override fun snapshot() = snapshot
-        override fun pause() {}
-        override fun resume() {}
-        override fun setWorkerCount(count: Int) {}
+        override suspend fun snapshot() = snapshot
+        override suspend fun pause() {}
+        override suspend fun resume() {}
+        override suspend fun setWorkerCount(count: Int) {}
     }
     private fun click(x: Int, y: Int, button: Int = 1) = MouseAction(MouseActionType.CLICK_DOWN, button, TerminalPosition(x, y))
 

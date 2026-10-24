@@ -5,7 +5,7 @@ import java.nio.file.Path
 import kotlin.test.*
 
 class SshPreflightTest {
-    private val config = AirliftConfig("user@host", "/source", Path.of("dest"), port = 2222)
+    private val config = AirliftConfig("user@host", "/source", kotlinx.io.files.Path("dest"), port = 2222)
     private val unknown = SshCheckResult(255, "No ECDSA host key is known for host and you have requested strict checking.\nHost key verification failed.")
 
     @Test fun `trusted host needs no prompt`() {

@@ -2,6 +2,7 @@ package iris.tools.airlift.monitor
 
 import iris.tools.airlift.AirliftConfig
 import iris.tools.airlift.SshAuthentication
+import iris.tools.airlift.configure
 import iris.tools.airlift.io.JvmFileAccess
 
 internal data class SshCheckResult(val exitCode: Int, val output: String)
@@ -20,7 +21,7 @@ internal fun checkSshConnection(
         add(config.sshExecutable)
         addAll(listOf("-p", config.port.toString(), "-o", "ConnectTimeout=${config.connectTimeoutSeconds}",
             "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3"))
-        config.identityFile?.let { addAll(listOf("-i", it.toAbsolutePath().toString())) }
+        config.identityFile?.let { addAll(listOf("-i", it.toNioPath().toAbsolutePath().toString())) }
     }
     fun strict() = authenticate(base + listOf("-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", config.host, "true"))
     val first = execute(strict(), false)

@@ -13,7 +13,7 @@ import iris.tools.airlift.monitor.MonitorModel.Companion.duration
 class AirliftMonitor(private val source: MonitorSource, private val title: String = source.title, private val swing: Boolean = false) {
     private val overallRate = OverallRate()
     /** Q detaches only. This method never closes the source or dispatcher. */
-    fun run(screen: Screen = TerminalAppearance.createScreen(title, swing)) {
+    suspend fun run(screen: Screen = TerminalAppearance.createScreen(title, swing)) {
         screen.use {
             it.startScreen()
             it.cursorPosition = null
@@ -49,7 +49,7 @@ class AirliftMonitor(private val source: MonitorSource, private val title: Strin
                     }
                     else -> Unit
                 }
-                Thread.sleep(200)
+                kotlinx.coroutines.delay(200)
             }
         }
     }

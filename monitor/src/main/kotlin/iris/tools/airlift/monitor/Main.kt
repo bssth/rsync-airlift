@@ -6,7 +6,7 @@ import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 
-fun main(args: Array<String>) {
+fun main(args: Array<String>) = kotlinx.coroutines.runBlocking {
     var exitCode = 0
     try { launch(args.toList()) }
     catch (e: Exception) { System.err.println("Airlift: ${e.message}"); exitCode = 1 }
@@ -14,7 +14,7 @@ fun main(args: Array<String>) {
     if (exitCode != 0) kotlin.system.exitProcess(exitCode)
 }
 
-private fun launch(args: List<String>) {
+private suspend fun launch(args: List<String>) {
     if (args.isEmpty() || "--help" in args) {
         println("""
             Rsync Airlift Monitor
@@ -61,11 +61,11 @@ private fun launch(args: List<String>) {
     val roots = allRoots.firstOrNull()
     val initialConfig = if (demo) {
         val root = JvmFileAccess.temporaryDirectory("airlift-demo-")
-        AirliftConfig("demo@localhost", "/demo", root.resolve("files"), workers = options["--workers"]?.toInt() ?: 4, logDirectory = root.resolve("logs"))
+        AirliftConfig("demo@localhost", "/demo", root.resolve("files").toPortablePath(), workers = options["--workers"]?.toInt() ?: 4, logDirectory = root.resolve("logs").toPortablePath())
     } else requireNotNull(roots).let { roots -> AirliftConfig(
-        host = roots.host, remoteRoot = roots.remoteRoot, localRoot = Path.of(if (roots.direction == TransferDirection.UPLOAD) sourceBase(roots.localRoot.replace('\\', '/')) else roots.localRoot),
+        host = roots.host, remoteRoot = roots.remoteRoot, localRoot = Path.of(if (roots.direction == TransferDirection.UPLOAD) sourceBase(roots.localRoot.replace('\\', '/')) else roots.localRoot).toPortablePath(),
         workers = options["--workers"]?.toInt() ?: 16, port = options["--port"]?.toInt() ?: 22,
-        identityFile = options["--identity"]?.let(Path::of),
+        identityFile = options["--identity"]?.let { kotlinx.io.files.Path(it) },
         direction = roots.direction,
         rsyncOptions = options["--rsync"],
     ) }
@@ -87,13 +87,13 @@ private fun launch(args: List<String>) {
     }
     if (!demo) println("${plan.tasks.size} files scheduled in ${tasks.size} rsync jobs; " +
         "${tasks.sumOf { it.entries.ifEmpty { it.files.ifEmpty { listOf(it.path) } }.size }} file-list entries after directory optimization.")
-    val endpoint = monitorEndpoint(options["--endpoint"], if (demo) config.localRoot.parent else null)
+    val endpoint = monitorEndpoint(options["--endpoint"], if (demo) config.localRoot.toNioPath().parent else null)
     val dispatcher = if (demo) AirliftDispatcher(config, tasks, demoSessions()) else AirliftDispatcher(config, tasks)
     val source = DispatcherMonitorSource(dispatcher, if (demo) "RSYNC AIRLIFT | DEMO - SIMULATED DATA" else "RSYNC AIRLIFT",
         if (arguments.paths.size > 2) arguments.paths.dropLast(1).joinToString("; ") else dispatcher.sourceDescription)
     MonitorServer(source, endpoint).use { server ->
         val stop = CountDownLatch(1)
-        val hook = Thread { dispatcher.close(); server.close(); stop.countDown() }
+        val hook = Thread { kotlinx.coroutines.runBlocking { dispatcher.close() }; server.close(); stop.countDown() }
         Runtime.getRuntime().addShutdownHook(hook)
         try {
             dispatcher.start()
@@ -120,14 +120,14 @@ internal fun monitorEndpoint(explicit: String?, demoRoot: Path?): Path =
 private fun demoSessions() = TransferSessionFactory {
     object : TransferSession {
         val closed = AtomicBoolean()
-        override fun connect() { check(!closed.get()) }
-        override fun transfer(task: TransferTask, logFile: Path, progress: (TransferProgress) -> Unit): Int {
+        override suspend fun connect() { check(!closed.get()) }
+        override suspend fun transfer(task: TransferTask, logFile: kotlinx.io.files.Path, progress: suspend (TransferProgress) -> Unit): Int {
             val size = requireNotNull(task.size)
             JvmFileAccess.bufferedWriter(logFile).use { log ->
                 log.appendLine("DEMO: simulated transfer ${task.path}"); log.flush()
                 for (step in 1..100) {
                     if (closed.get()) return 20
-                    Thread.sleep(80)
+                    kotlinx.coroutines.delay(80)
                     val matched = if (step == 100) size * 3 / 5 else null
                     progress(TransferProgress(size * step / 100, size / 8.0, (100 - step) * 8L / 100,
                         percent = step, matchedBytes = matched, literalBytes = matched?.let { size - it }))
@@ -141,6 +141,6 @@ private fun demoSessions() = TransferSessionFactory {
             }
             return 0
         }
-        override fun close() { closed.set(true) }
+        override suspend fun close() { closed.set(true) }
     }
 }
