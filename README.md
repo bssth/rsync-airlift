@@ -19,6 +19,11 @@ operation in an interactive terminal monitor inspired by `htop`.
 You still choose the files, endpoints, and rsync options. Airlift manages the queue,
 the workers, and the view of what is happening.
 
+![Rsync Airlift terminal monitor showing parallel file synchronization in progress](docs/images/airlift-in-process.png)
+
+*Parallel synchronization in progress: per-worker progress, file sizes, speeds,
+and estimated completion times. Displayed rates measure logical processing, not network throughput.*
+
 ## Born from a production migration
 
 Airlift began with a real migration: approximately **1.16 TB of MyISAM database
@@ -54,6 +59,11 @@ estimated completion times, queue and error views, and a details panel for the
 selected worker. You can change concurrency while a run is active, pause the
 assignment of new files, or detach the panel and attach again later.
 
+![Airlift workers arranged in two columns, showing progress bars, checksum preparation, failed connections, and selected worker details](docs/images/airlift-workers.png)
+
+*A larger worker pool during an experiment: per-worker progress, visible failures,
+and details for the selected worker. Columns are added when the available height fills up.*
+
 The overall bar separates data that did not need to be sent from newly transferred
 file data and failures. `Matched` includes unchanged files that rsync skipped;
 it does not imply that every byte was checksum-verified. `Processed` and the
@@ -75,7 +85,9 @@ Application-specific selection belongs to the caller; Airlift handles dispatch.
 In subsequent experiments on a dataset of approximately **127.6 GiB across 1,003
 files**, a one-worker run took **6:34**. A six-worker run took **1:29** — an observed
 **4.43× reduction in elapsed time**. Further runs included **2:09 with six workers**
-and **1:35 with twelve**.
+and **1:35 with twelve**. The fastest observed run finished in **1:14 with eleven
+workers**, with **359.5 MiB of new file data** and **no failed files**. Compared
+with the one-worker run, that is **5.32× faster**, or **81.2% less elapsed time**.
 
 These were practical migration experiments, not a controlled benchmark. The amount
 of changed data differed between runs, and filesystem caching may have influenced
