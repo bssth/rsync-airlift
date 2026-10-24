@@ -45,10 +45,15 @@ class SshPreflightTest {
     @Test fun `changed host key and auth failures never offer trust prompt`() = kotlinx.coroutines.test.runTest {
         for (error in listOf("REMOTE HOST IDENTIFICATION HAS CHANGED!", "Permission denied (publickey,password).")) {
             var calls = 0
+            var passwordPrompts = 0
             assertFailsWith<IllegalStateException> {
-                checkSshConnection(config, true, { it }) { _, prompt -> calls++; assertFalse(prompt); SshCheckResult(255, error) }
+                checkSshConnection(config, true, authenticate = { it }, passwordAvailable = { false },
+                    readPassword = { passwordPrompts++; null },
+                    installPassword = { fail("Cancelled password must not be installed") },
+                ) { _, prompt -> calls++; assertFalse(prompt); SshCheckResult(255, error) }
             }
             assertEquals(1, calls)
+            assertEquals(if (error.startsWith("Permission denied")) 1 else 0, passwordPrompts)
         }
         assertFalse(unknownHostKey("REMOTE HOST IDENTIFICATION HAS CHANGED!\n${unknown.output}"))
     }

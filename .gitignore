@@ -4,3 +4,6 @@
 .idea/
 *.iml
 monitor/airlift-monitor.connection
+# Local APT signing key export; never commit private signing material.
+airlift-apt-private.asc
+tools/__pycache__/

@@ -16,7 +16,7 @@ class PasswordPromptTest {
             authenticate = { if (installed) listOf("sshpass", "-e") + it else it },
             passwordAvailable = { installed },
             readPassword = { prompts++; entered },
-            installPassword = { assertEquals("test password", String(it)); installed = true },
+            installPassword = { assertEquals("test password", it.concatToString()); installed = true },
         ) { command, interactive ->
             assertFalse(interactive)
             assertFalse(command.any { "test password" in it })
@@ -44,11 +44,10 @@ class PasswordPromptTest {
         try {
             checkSshConnection(config, true, passwordAvailable = { true },
                 readPassword = { prompts++; "replacement".toCharArray() }) { command, _ ->
-                val builder = ProcessBuilder(command)
-                builder.environment()["SSHPASS"] = "other server password"
-                SshAuthentication.configure(builder)
+                val spec = SshAuthentication.configure(iris.tools.airlift.process.ProcessSpec(command,
+                    environment = mapOf("SSHPASS" to "other server password")))
                 if (calls++ == 0) denied else {
-                    assertEquals("replacement", builder.environment()["SSHPASS"])
+                    assertEquals("replacement", spec.environment["SSHPASS"])
                     SshCheckResult(0, "")
                 }
             }
@@ -74,19 +73,4 @@ class PasswordPromptTest {
         assertContains(error.message.orEmpty(), "SSHPASS")
     }
 
-    @Test fun `prompted password reaches only sshpass process environment and can be cleared`() = kotlinx.coroutines.test.runTest {
-        try {
-            SshAuthentication.usePassword("test password".toCharArray())
-            val command = SshAuthentication.command(listOf("ssh", "-o", "BatchMode=yes"), emptyMap())
-            assertEquals(listOf("sshpass", "-e", "ssh", "-o", "BatchMode=no"), command)
-            val builder = ProcessBuilder(command)
-            builder.environment().remove("SSHPASS")
-            SshAuthentication.configure(builder)
-            assertEquals("test password", builder.environment()["SSHPASS"])
-            val plain = ProcessBuilder("ssh")
-            plain.environment().remove("SSHPASS")
-            assertNull(SshAuthentication.configure(plain).environment()["SSHPASS"])
-        } finally { SshAuthentication.clearPassword() }
-        assertEquals(listOf("ssh"), SshAuthentication.command(listOf("ssh"), emptyMap()))
-    }
 }

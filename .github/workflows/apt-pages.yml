@@ -1,0 +1,106 @@
+name: Publish APT repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Debian version, increasing for every publication (for example 0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apt-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate version
+        env:
+          DEB_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY'
+          import os, re
+          if not re.fullmatch(r'[0-9][A-Za-z0-9.+~\-]*', os.environ['DEB_VERSION']):
+              raise SystemExit('Invalid Debian version')
+          PY
+      - name: Check repository generator
+        run: python -m unittest discover -s tools -p test_apt_repository.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Build and test Linux Native
+        run: bash ./gradlew -PenableLinuxNative=true :core:linuxX64Test :monitor:linuxX64Test :monitor:linkReleaseExecutableLinuxX64
+      - name: Package and installation smoke test
+        env:
+          DEB_VERSION: ${{ inputs.version }}
+        run: |
+          python tools/package_native.py --version "$DEB_VERSION"
+          sudo apt-get update
+          sudo apt-get install -y ./monitor/build/native-release/*.deb
+          rsync-airlift --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-release
+          path: monitor/build/native-release/
+          if-no-files-found: error
+
+  sign:
+    needs: build
+    runs-on: ubuntu-22.04
+    environment: apt-signing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-release
+          path: packages
+      - name: Install repository tools
+        run: sudo apt-get update && sudo apt-get install -y apt-utils gnupg
+      - name: Import signing key and build repository
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          APT_SIGNING_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
+          APT_SIGNING_FINGERPRINT: ${{ vars.APT_SIGNING_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          export GNUPGHOME="$RUNNER_TEMP/airlift-gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          trap 'gpgconf --kill gpg-agent || true; rm -rf -- "$GNUPGHOME"; rm -f -- "$RUNNER_TEMP/airlift-passphrase"' EXIT
+          test -n "$APT_SIGNING_KEY"
+          test -n "$APT_SIGNING_FINGERPRINT"
+          printf '%s' "$APT_SIGNING_KEY" | gpg --batch --import
+          (umask 077; printf '%s' "$APT_SIGNING_PASSPHRASE" > "$RUNNER_TEMP/airlift-passphrase")
+          unset APT_SIGNING_KEY APT_SIGNING_PASSPHRASE
+          python tools/build_apt_repository.py --packages packages --output public \
+            --sign-key "$APT_SIGNING_FINGERPRINT" --passphrase-file "$RUNNER_TEMP/airlift-passphrase"
+      - name: Verify APT accepts the signed repository
+        run: |
+          sudo install -m 644 public/rsync-airlift-archive-keyring.gpg /usr/share/keyrings/airlift-ci.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/airlift-ci.gpg] file:$GITHUB_WORKSPACE/public stable main" | sudo tee /etc/apt/sources.list.d/airlift-ci.list
+          sudo apt-get update -o APT::Update::Error-Mode=any
+          apt-cache policy rsync-airlift
+          sudo apt-get install --download-only -y rsync-airlift
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+
+  deploy:
+    needs: sign
+    runs-on: ubuntu-22.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy repository
+        id: deployment
+        uses: actions/deploy-pages@v4

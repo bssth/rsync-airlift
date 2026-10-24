@@ -1,0 +1,2 @@
+headers = airlift_posix.h
+package = iris.tools.airlift.posix

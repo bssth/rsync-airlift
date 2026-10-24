@@ -165,6 +165,13 @@ to understand, and reduce the time spent waiting for synchronization to finish.
 
 *Built with Kotlin. Powered by rsync. Inspired by a real production migration.*
 
+## APT installation
+
+A signed Debian/Ubuntu amd64 repository on GitHub Pages is prepared for publication.
+After its first deployment, users can add it once and install/update with APT.
+See [APT setup and installation](docs/APT.md) for the maintainer configuration,
+signing key setup and user commands. The repository is not live until deployed.
+
 ## Build and deployment
 
 Requires **Java 21**. The project uses Kotlin **2.1.21** and the Gradle wrapper.
@@ -589,7 +596,7 @@ File content I/O uses `kotlinx-io` 0.7.0 behind a small portable implementation.
 The JVM adapters retain the existing `java.nio.file.Path` and stream APIs, atomic
 temporary-file creation, owner-only connection-file creation, and inventory scans
 without following symbolic links. The connection-file format is unchanged.
-Both core and monitor use Kotlin Multiplatform source sets with a JVM target. Native targets have not been added. Java process, socket
+Both core and monitor use Kotlin Multiplatform source sets with JVM and opt-in Linux Native targets. Java process, socket
 and terminal APIs are still used on JVM. The `kotlinx-io` filesystem API is experimental.
 
 ```kotlin
@@ -642,8 +649,8 @@ The library adapters do not own the dispatcher; close their resources separately
 
 ### Multiplatform source layout
 
-`core` applies Kotlin Multiplatform 2.1.21 with only `jvm()` enabled and Java 21.
-`monitor` also applies Kotlin Multiplatform with only `jvm()` enabled.
+`core` applies Kotlin Multiplatform 2.1.21 with a JVM target and Java 21.
+`monitor` also applies Kotlin Multiplatform. Both modules have an opt-in `linuxX64()` target (`-PenableLinuxNative=true`).
 
 | Source set | Contents |
 | --- | --- |
@@ -692,13 +699,11 @@ Monitor source sets:
 
 `monitor:jvmJar` and `monitor:jvmTest` build and test the JVM variant;
 `:monitor:jar`, `:monitor:test`, `:monitor:run`, `:monitor:installDist` and
-`:monitor:jarBundle` remain available. No Native target is configured.
+`:monitor:jarBundle` remain available. The Linux target provides a Native executable; the ANSI terminal backend has been verified on Linux with real SSH/rsync transfers.
 
 The core JVM artifact is built by `:core:jvmJar`; tests run with `:core:jvmTest`.
 `:core:jar` and `:core:test` remain compatibility aliases. The deployed filenames,
-manifest classpaths and monitor connection protocol are unchanged. There is no
-Native target yet. A Native build needs implementations of the process launcher/pipes, authentication, SSH files, log
-store, clock and path contracts; the monitor still depends on JVM socket/terminal APIs.
+manifest classpaths and monitor connection protocol are unchanged. The Linux target is opt-in and provides POSIX process/filesystem/system adapters, loopback sockets and an ANSI terminal backend. JVM adapters remain separate.
 
 ## Logs, resuming and consistency
 
@@ -722,3 +727,41 @@ Tests cover scheduling, batch accounting, directory-coverage decisions, SSH comm
 selection and prompt flows, virtual-terminal rendering, mouse decoding, controls,
 and the localhost attach protocol. Real SSH/rsync transfer experiments are described
 above; automated unit tests do not replace an integration test on your target hosts.
+
+### Linux Native work in progress
+
+Enable the Linux x64 targets explicitly while their adapters are under development:
+
+```bash
+./gradlew -PenableLinuxNative=true :core:compileCommonMainKotlinMetadata :monitor:compileCommonMainKotlinMetadata
+```
+
+Both common source sets pass metadata compilation independently of JVM code.
+This checks portable source/dependency metadata, not Linux linking or execution.
+Linux core process and system adapters are implemented and its Native test executable
+can be linked. Linux monitor socket, console, inventory and application adapters are
+implemented. A Native ANSI terminal backend supports demo, attach and interactive
+transfers and has been verified on Linux with real SSH/rsync transfers. See [Linux Native](docs/NATIVE.md)
+for headless build and test commands. Default JVM builds remain unchanged.
+Linux compilation and runtime validation will be performed on a Linux server.
+
+Linux core tests can be built and run on the Linux server:
+
+```bash
+./gradlew -PenableLinuxNative=true :core:linuxX64Test
+```
+
+The test executable can also be cross-linked on Windows with
+`:core:linkDebugTestLinuxX64`, then copied to Linux and executed directly:
+`core/build/bin/linuxX64/debugTest/test.kexe`. Native compilation and linking have
+been checked; All 41 core Native tests passed on the Linux server; monitor Native service and TUI execution have also been verified on Linux.
+
+`-PenableWindowsNative=true` exposes a `mingwX64()` target in both modules for
+future Windows Native work. Only common metadata can currently be checked for
+that target; Windows process/system/monitor actual implementations are not yet
+provided. POSIX implementations are confined to `linuxX64Main`.
+
+The Native terminal backend renders shared frames as ANSI deltas and uses POSIX
+termios for raw input and restoration. It adds no ncurses dependency. Native
+`--demo` and `--attach FILE` are available alongside headless `--serve` modes;
+`--swing` remains JVM-only. See [Native usage](docs/NATIVE.md).

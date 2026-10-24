@@ -8,6 +8,18 @@ plugins {
 
 kotlin {
     jvmToolchain(21)
+    if (providers.gradleProperty("enableWindowsNative").orNull == "true") mingwX64()
+    // Opt in while Linux actual adapters are being implemented; retain the working JVM build.
+    if (providers.gradleProperty("enableLinuxNative").orNull == "true") linuxX64 {
+        compilations.getByName("main").cinterops.create("airliftMonitor") {
+            defFile(project.file("src/linuxX64Main/cinterop/airlift_monitor.def"))
+            includeDirs(project.file("src/linuxX64Main/cinterop"))
+        }
+        binaries.executable {
+            baseName = "rsync-airlift"
+            entryPoint = "iris.tools.airlift.monitor.main"
+        }
+    }
     jvm { testRuns["test"].executionTask.configure { useJUnitPlatform() } }
     sourceSets {
         commonMain.dependencies { api(project(":core")) }

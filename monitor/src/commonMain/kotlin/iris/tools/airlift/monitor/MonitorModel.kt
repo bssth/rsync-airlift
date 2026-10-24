@@ -33,7 +33,7 @@ class MonitorModel {
                 } else mouseRows.firstOrNull { y == it.y && x >= it.x && x < it.x + it.width }?.let { selected = it.index }
             }
             MonitorMouseAction.SCROLL_UP, MonitorMouseAction.SCROLL_DOWN -> if (y in 10 until bodyBottom) {
-                val step = if (action.actionType == MonitorMouseAction.SCROLL_UP) -3 else 3
+                val step = if (action.actionType == MonitorMouseAction.SCROLL_UP) -1 else 1
                 selected = (selected + step).coerceIn(0, (rows(snapshot).size - 1).coerceAtLeast(0))
             }
             else -> Unit

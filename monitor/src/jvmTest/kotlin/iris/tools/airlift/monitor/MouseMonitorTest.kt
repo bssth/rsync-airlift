@@ -71,9 +71,9 @@ class MouseMonitorTest {
         wheel(MouseActionType.SCROLL_UP)
         assertEquals(0, model.selected)
         wheel(MouseActionType.SCROLL_DOWN)
-        assertEquals(3, model.selected)
+        assertEquals(1, model.selected)
         wheel(MouseActionType.SCROLL_DOWN, 22)
-        assertEquals(3, model.selected)
+        assertEquals(1, model.selected)
         model.selected = 39
         wheel(MouseActionType.SCROLL_DOWN)
         assertEquals(39, model.selected)
