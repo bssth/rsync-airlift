@@ -32,7 +32,7 @@ class MonitorServer(private val source: MonitorSource, val endpoint: Path) : Aut
                 setProperty("title", source.title)
                 setProperty("from", source.from)
                 setProperty("to", source.to)
-                setProperty("protocol", "2")
+                setProperty("protocol", "3")
             }
             Files.newOutputStream(endpoint).use { properties.store(it, "Rsync Airlift local monitor connection") }
         } catch (e: Exception) {
@@ -63,7 +63,7 @@ class MonitorServer(private val source: MonitorSource, val endpoint: Path) : Aut
                 val output = DataOutputStream(it.getOutputStream())
                 val version = input.readInt()
                 if (input.readUTF() != token) return
-                if (version != 2) {
+                if (version != 3) {
                     output.writeBoolean(false)
                     Wire.text(output, "Monitor protocol changed. Restart dispatcher and monitor together.")
                     output.flush()
@@ -100,7 +100,7 @@ class MonitorServer(private val source: MonitorSource, val endpoint: Path) : Aut
 class RemoteMonitorSource(endpoint: Path) : MonitorSource {
     private val properties = Properties().apply { Files.newInputStream(endpoint).use { load(it) } }
     init {
-        require(properties.getProperty("protocol") == "2") { "Monitor protocol changed. Restart dispatcher and monitor together." }
+        require(properties.getProperty("protocol") == "3") { "Monitor protocol changed. Restart dispatcher and monitor together." }
     }
     private val port = properties.getProperty("port").toInt()
     private val token = properties.getProperty("token") ?: error("Missing monitor token")
@@ -113,7 +113,7 @@ class RemoteMonitorSource(endpoint: Path) : MonitorSource {
             socket.connect(InetSocketAddress("127.0.0.1", port), 1500)
             socket.soTimeout = 3000
             val output = DataOutputStream(socket.getOutputStream())
-            output.writeInt(2)
+            output.writeInt(3)
             output.writeUTF(token)
             output.writeUTF(command)
             count?.let { output.writeInt(it) }
@@ -154,6 +154,7 @@ private object Wire {
         output.writeInt(s.tasks.size)
         for (t in s.tasks) {
             text(output, t.task.path); number(output, t.task.size); text(output, t.task.id)
+            output.writeInt(t.task.files.size); t.task.files.forEach { text(output, it) }
             text(output, t.status.name); output.writeInt(t.attempts)
             nullable(output, t.error); nullable(output, t.logFile?.toString())
             // nanoTime origins differ between processes; transmit age instead.
@@ -167,6 +168,7 @@ private object Wire {
                 number(output, it.percent?.toLong())
                 number(output, it.matchedBytes)
                 number(output, it.literalBytes)
+                nullable(output, it.currentFile); number(output, it.transferredFiles?.toLong())
             }
         }
         output.writeInt(s.workers.size)
@@ -179,12 +181,13 @@ private object Wire {
         val paused = input.readBoolean(); val cancelled = input.readBoolean(); val target = input.readInt()
         val started = number(input); val finished = number(input)
         val tasks = List(count(input)) {
-            val task = TransferTask(text(input), number(input), text(input))
+            val path = text(input); val size = number(input); val id = text(input)
+            val task = TransferTask(path, size, id, files = List(count(input)) { text(input) })
             val status = TaskStatus.valueOf(text(input)); val attempts = input.readInt()
             val error = nullable(input); val log = nullable(input)?.let(Path::of)
             val updated = number(input)?.let { System.nanoTime() - it }
             val progress = if (input.readBoolean()) TransferProgress(input.readLong(),
-                if (input.readBoolean()) input.readDouble() else null, number(input), number(input)?.toInt(), number(input), number(input)) else null
+                if (input.readBoolean()) input.readDouble() else null, number(input), number(input)?.toInt(), number(input), number(input), nullable(input), number(input)?.toInt()) else null
             TaskState(task, status, attempts, progress, error, log, updated)
         }
         val workers = List(count(input)) {

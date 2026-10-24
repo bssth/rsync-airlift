@@ -130,7 +130,7 @@ class AirliftMonitor(private val source: MonitorSource, private val title: Strin
             it.status in setOf(WorkerStatus.CONNECTING, WorkerStatus.IDLE, WorkerStatus.TRANSFERRING)
         }
         line(3, "Workers $workerCount | Elapsed ${duration(elapsed)}")
-        line(4, "Done ${snapshot.completed}/${snapshot.tasks.size} | Failed ${snapshot.failed}")
+        line(4, "Done ${snapshot.completed}/${snapshot.tasks.sumOf { it.task.fileCount }} | Failed ${snapshot.failed}")
         line(5, "Processed ${bytes(processed)} / ${if (allKnown) bytes(total) else "unknown total"} | ${displayRate?.let { bytes(it.toLong()) + "/s" } ?: "--/s"}$etaText")
         val breakdown = OverallBreakdown.from(snapshot)
         val barWidth = (width - 10).coerceAtMost(100)
@@ -177,10 +177,19 @@ class AirliftMonitor(private val source: MonitorSource, private val title: Strin
             val workerId = row?.workerId ?: snapshot.workers.firstOrNull { task != null && it.taskId == task.task.id }?.id
             val worker = snapshot.workers.firstOrNull { it.id == workerId }
             line(y, "DETAILS WORKER${workerId?.let { " %03d".format(it) } ?: ""}", TextColor.ANSI.CYAN)
-            line(y + 1, "File: ${task?.task?.path ?: "--"}")
+            val currentName = task?.progress?.currentFile ?: if ((task?.task?.fileCount ?: 1) > 1) "awaiting rsync filename" else task?.task?.path ?: "--"
+            line(y + 1, "File: $currentName")
             val progress = task?.progress
             val stats = "matched ${bytes(progress?.matchedBytes)} | new ${bytes(progress?.literalBytes)}"
-            line(y + 2, "${task?.status ?: worker?.status ?: "--"} | Size ${bytes(task?.task?.size)} | attempt ${task?.attempts ?: 0}")
+            val batchInfo = if ((task?.task?.fileCount ?: 1) > 1) {
+                val index = task!!.task.files.indexOf(task.progress?.currentFile).takeIf { it >= 0 }?.plus(1)
+                val position = if (task.status == TaskStatus.SUCCEEDED) "Processed ${task.task.fileCount}/${task.task.fileCount}"
+                    else "file ${index ?: "--"}/${task.task.fileCount}"
+                " | Files ${task.task.fileCount} | $position | sent ${task.progress?.transferredFiles ?: 0}"
+            } else ""
+            val statusInfo = if (batchInfo.isNotEmpty()) "${task?.status}$batchInfo | Size ${bytes(task?.task?.size)}"
+                else "${task?.status ?: worker?.status ?: "--"} | Size ${bytes(task?.task?.size)} | attempt ${task?.attempts ?: 0}"
+            line(y + 2, statusInfo)
             line(y + 3, "$stats | Speed ${task?.let { MonitorModel.rate(it) } ?: "--/s"}")
             val error = task?.error ?: row?.error
             line(y + 4, error?.let { "Error: $it" } ?: "", TextColor.ANSI.RED)

@@ -45,12 +45,12 @@ class WorkerDisplayTest {
         assertEquals(task, row.task)
     }
 
-    @Test fun `worker bar stays single color and omits finished label`() {
+    @Test fun `worker bar splits final matched and new data and omits finished label`() {
         val task = TaskState(TransferTask("file", 1000), TaskStatus.SUCCEEDED,
             progress = TransferProgress(1000, null, null, 100, matchedBytes = 750, literalBytes = 250))
         val segments = MonitorModel.workerSegments(WorkerState(1, WorkerStatus.FINISHED, "file"), task)
-        assertEquals(0, segments.filter { it.color == TextColor.ANSI.CYAN }.sumOf { it.text.length })
-        assertEquals(16, segments.filter { it.color == TextColor.ANSI.GREEN }.sumOf { it.text.length })
+        assertEquals(12, segments.filter { it.color == TextColor.ANSI.CYAN }.sumOf { it.text.length })
+        assertEquals(4, segments.filter { it.color == TextColor.ANSI.GREEN }.sumOf { it.text.length })
         assertFalse(segments.joinToString("") { it.text }.contains("FINISHED"))
         val unknown = MonitorModel.workerSegments(WorkerState(1, WorkerStatus.FINISHED, "file"), task.copy(progress = null))
         assertFalse(unknown.any { it.text.isNotEmpty() && it.color == TextColor.ANSI.CYAN })

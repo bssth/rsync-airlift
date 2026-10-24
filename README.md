@@ -37,8 +37,10 @@ and file scheduling together in one terminal workflow.
   you supplied.
 - **Put available resources to work.** The CLI collects file sizes before
   transfer and schedules the largest files first. A shared queue feeds each
-  available worker its next file, while each worker reuses its SSH ControlMaster
-  connection across tasks. This can reduce waiting on workloads with independent
+  available worker its next job. Small files are grouped into batches with a
+  default minimum load of 5 MiB, amortizing local and remote rsync startup across
+  many files. Each worker also reuses its SSH ControlMaster connection across jobs.
+  This can reduce waiting on workloads with independent
   files and spare CPU, storage, or network capacity; it does not guarantee a
   speedup when those resources are already saturated.
 
@@ -114,9 +116,22 @@ Application-specific selection belongs to the caller; Airlift handles dispatch.
 In subsequent experiments on a dataset of approximately **127.6 GiB across 1,003
 files**, a one-worker run took **6:34**. A six-worker run took **1:29** — an observed
 **4.43× reduction in elapsed time**. Further runs included **2:09 with six workers**
-and **1:35 with twelve**. The fastest observed run finished in **1:14 with eleven
+and **1:35 with twelve**. Before batching, the fastest observed run finished in **1:14 with eleven
 workers**, with **359.5 MiB of new file data** and **no failed files**. Compared
 with the one-worker run, that is **5.32× faster**, or **81.2% less elapsed time**.
+
+After introducing small-file batching, a run with **four workers** completed in
+**1:14**, with **303.3 MiB of new file data**. A subsequent run with **eight workers**
+finished in **50 seconds**, with **318.4 MiB of new file data**, all **1,003 files**
+completed, and **no failures**. That is an observed **7.88× speedup** over the
+original one-worker run, or **87.3% less elapsed time**.
+
+One worker handled **458 files in a single rsync invocation**. Previously, each
+file required starting rsync on both the local and remote machines and negotiating
+a new rsync protocol session, even though the SSH connection was already reused.
+Batching amortizes that startup and protocol overhead across the file list. Large
+files still occupy their own jobs in the descending-size queue, while small files
+share invocations near the end of the run.
 
 These were practical migration experiments, not a controlled benchmark. The amount
 of changed data differed between runs, and filesystem caching may have influenced
@@ -163,9 +178,45 @@ Building and unit tests work on Windows. Actual transfers target a POSIX environ
 Provision known_hosts before starting; host key verification is mandatory.
 With `SSHPASS` present in the environment, initial SSH connections use `sshpass -e`
 and `BatchMode=no` (install sshpass on the dispatcher machine). Otherwise they
-use keys/ssh-agent and `BatchMode=yes`. The password is inherited through the
-environment, never inserted into command arguments. This applies to discovery
+use keys/ssh-agent and `BatchMode=yes`. If key authentication fails and an
+interactive console is available, Airlift asks for the SSH password once, without
+echo, before file discovery and opening the monitor. This fallback also requires
+sshpass. The entered password is reused for discovery and worker connections;
+it is not written to disk, logs, or command arguments, or exported to your shell.
+A rejected password ends startup without another prompt. For a headless launch,
+configure keys/ssh-agent or export `SSHPASS` in advance.
+The password is supplied to sshpass through its process environment. This applies to discovery
 and worker ControlMaster authentication; multiplexed operations use the existing master.
+
+## Confirming a transfer and Midnight Commander
+
+Before a real transfer, the launcher displays `From` and `To` and asks for
+confirmation. Only `y` or `yes` starts synchronization; Enter, `no`, or EOF cancels.
+Confirmation happens before SSH authentication, discovery and worker startup.
+`--swing` uses a graphical confirmation dialog. Unattended runs must pass `--yes`;
+this skips only the direction confirmation, not SSH host-key verification or authentication.
+The core library, demo and attach modes do not ask for transfer confirmation.
+
+Midnight Commander shell-link paths are recognized automatically:
+`/sh://user@host/home/data` becomes `user@host:/home/data`.
+No `--mc` flag is needed; it is accepted as an optional compatibility flag.
+Paths containing spaces are retained. One endpoint must still be local; remote-to-remote
+copies are not supported. Use `--port` for a nonstandard SSH port rather than embedding
+a port in the MC shell-link host.
+
+Add an entry to `~/.config/mc/menu` (adjust the absolute JAR path):
+
+```text
+A Rsync Airlift - synchronize panels
+    java -jar /opt/rsync-airlift/rsync-airlift.jar --rsync "-av --partial" %d %D
+```
+
+`%d` is the **active** panel directory (source); `%D` is the **other** panel
+directory (destination), not fixed left/right positions. MC expands the macros
+in its user-menu command. Review the displayed paths before confirming the copy.
+See the [MC manual](https://source.midnight-commander.org/man/mc.html) for user menus
+and macro substitution. Airlift makes its own SSH connections; it does not reuse MC's
+authenticated shell link. Its normal key, `SSHPASS`, or interactive password flow applies.
 
 ## Executable JAR bundle
 
@@ -234,7 +285,8 @@ using a NUL-delimited file list, not shell interpolation. Task IDs must be uniqu
 callers must avoid overlapping destinations, including aliases through symlinks.
 The library does not scan directories, filter extensions, sort, or recursively
 discover files. Symlinks use rsync archive semantics (copy the link itself).
-Hard-link relationships across separate file tasks are not preserved.
+Hard-link relationships across separate rsync jobs are not preserved; files in the
+same batch can retain them when the caller supplies `-H`.
 
 Files are assigned in input order; completion order depends on transfer times.
 Each worker owns one ControlMaster. Lowering concurrency lets current files
@@ -389,15 +441,56 @@ Demo runs now default to a connection file inside their unique temporary run dir
 
 Overall progress measures processed work: successful and finally failed tasks both consume their full size; pending and cancelled files do not. With missing or all-zero sizes, progress uses task count and available per-file percentages. Logical bytes and success/failure counters remain separate. Workers that naturally exhaust the queue are FINISHED; STOPPED is reserved for cancellation or concurrency retirement. Restart dispatcher and monitor together after this worker-status protocol change.
 
-Worker rows now show a 16-cell progress bar, percent, supplied file size, logical rate and compact ETA (s/m/h/d/w). Paths remain in Details. Yellow means logical progress; final rsync --stats split is cyan (= matched) and green (# literal/new data). Counters become known only at the end of an attempt and are not compressed wire bytes. Missing statistics stay unknown. Last task and statistics remain visible after workers finish. Demo final counters are explicitly simulated (60% matched). Monitor protocol is now version 2; restart dispatcher and monitor together.
+Worker rows show a progress bar, percent, job size, logical rate and compact ETA (s/m/h/d/w). Paths remain in Details. Final rsync --stats split is cyan (matched) and green (new data). Counters become known only at the end of an attempt and are not compressed wire bytes. Missing statistics stay unknown. Last job and statistics remain visible after workers finish. Demo final counters are explicitly simulated (60% matched). Monitor protocol is now version 3; restart dispatcher and monitor together.
 
-Worker panels now use vertical | ticks with blank unfilled cells. Headers and values share one column layout. Worker grid adds columns as width allows (52 cells per panel plus 3-cell gutters), fills down each column, and pages when needed; Left/Right moves between columns. Natural FINISHED is omitted from worker rows, while failed/connecting/stopped states remain visible. Worker bars never split matched/literal data. The overall bar aggregates the complete task ledger: cyan matched, green literal/new, red failed work, yellow processed work with no final breakdown (including in-flight progress). Empty cells are pending work. Successful files remain counted after workers move to new files. Unknown file sizes use file-count weights. No new disk checkpoint or persistence is implied by the in-memory aggregate.
+Worker panels use vertical | ticks with blank unfilled cells. Headers and values share one layout. Panels fill vertically before adding columns and are capped at 88 characters. Left/Right moves between columns. Natural FINISHED is omitted from worker rows; failed connections remain until dismissed with minus. Completed worker bars split matched/new data when final statistics are available. The overall bar aggregates the complete task ledger: cyan matched, green new, red failed work, yellow processed work with no final breakdown (including in-flight progress). Empty cells are pending work. Successful files remain counted after workers move to new jobs. No disk checkpoint or persistent job history is implied by the in-memory aggregate.
 
 After a successful file, SPEED retains file size divided by elapsed task processing time (including retries/backoff, excluding queue wait and initial SSH connection). This is logical file throughput, not wire traffic. Completed averages are excluded from live aggregate speed. ETA is blank for terminal file states.
 
 From and To are displayed immediately below the title and reflect upload/download direction. The standalone monitor receives them through the connection metadata file; restart the dispatcher to populate metadata for an old run.
 
 Real transfer syntax: rsync-airlift-monitor [options] SOURCE DESTINATION --files files.txt. Exactly one endpoint is remote: user@host:/absolute/directory/. Reversing the paths changes upload/download direction. Two paths default to an immediate TUI; --run is optional and --serve stays headless. Example: rsync-airlift-monitor --files files.txt --workers 4 user@server:/srv/source/ /srv/destination/. Q detaches; Ctrl+C stops. Real transfers require Linux or WSL with JDK 21, OpenSSH and rsync. This accepts directory roots and a caller-prepared relative file list; it does not discover files; copy flags can be supplied through --rsync. The old --host, --remote-root, --local-root and --upload options have been removed.
+
+## Batching small files
+
+The launcher sorts the input files largest first, then fills each rsync job until
+the accumulated source size reaches **5 MiB or more**, or the queue ends.
+The final job may be smaller. Each job is assigned to one available worker and
+uses one rsync process. Files larger than the threshold naturally fill a job on
+their own when encountered in this descending order. A different source root
+also closes the current job: rsync needs one common source root per invocation.
+
+Set the minimum load with `--batch-min-size` (bytes, decimal `KB`/`MB`/`GB`, or
+binary `KiB`/`MiB`/`GiB`, case-insensitive). `5MB` is 5,000,000 bytes;
+the default `5MiB` is 5,242,880 bytes:
+
+```sh
+java -jar rsync-airlift.jar --batch-min-size 5MiB --workers 8 \
+  --rsync "-av --partial" user@host:/source/ /destination/
+```
+
+There is no file-count limit on a job: zero-length files can share one invocation.
+File lists use NUL-separated stdin with `--from0 --files-from=-`, preserving spaces
+and newlines without temporary manifest files. The library accepts explicit batches
+using `TransferTask.files`; the CLI creates these batches automatically.
+
+Worker size and progress refer to the entire batch. Details show its file count,
+the current filename when rsync announces it, its index in the submitted list,
+and rsync's transferred-file counter. That counter excludes quick-check skips;
+it is not a count of all processed files, and rsync may reorder the input list.
+Final matched/new statistics split the worker bar when the job completes and
+accumulate into the overall bar. Exact live matched/new counters are unavailable
+until rsync reports its final statistics. Successfully skipped bytes count as Matched.
+
+`Done` counts files, not rsync processes, and advances when a job succeeds.
+If a batch exits unsuccessfully, its individual outcomes cannot be confirmed from
+the exit code alone: all files in that batch are conservatively counted as failed,
+even if some were copied successfully. Retrying reruns the entire batch; rsync
+reconciles files according to the supplied options. Each attempt has one shared log.
+Pause and concurrency reduction take effect between batches.
+
+The monitor protocol is now version 3. Restart dispatcher and attached monitors
+together when deploying this update. Third-party libraries are unchanged.
 
 ## Custom rsync options
 

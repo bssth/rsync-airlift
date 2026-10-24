@@ -35,13 +35,20 @@ data class WorkerLineLayout(val width: Int) {
             TaskStatus.RUNNING -> if (preparing) "" else MonitorModel.compactDuration(task.progress?.remainingSeconds)
             else -> "--"
         }
-        return listOf(
-            RowSegment("%03d [".format(worker.id)),
-            RowSegment(bar, when {
+        val statsProgress = task?.progress
+        val barSegments = if (label.isEmpty() && task?.status == TaskStatus.SUCCEEDED && statsProgress?.matchedBytes != null && statsProgress.literalBytes != null) {
+            val literal = statsProgress.literalBytes!!.coerceAtLeast(0)
+            val rawMatched = statsProgress.matchedBytes!!.coerceAtLeast(0)
+            val total = task.task.size ?: (rawMatched + literal)
+            val matched = if (task.task.files.isNotEmpty() || rawMatched + literal == 0L) (total - literal).coerceAtLeast(rawMatched) else rawMatched
+            val matchedWidth = if (total > 0) (barWidth * (matched.toDouble() / maxOf(total.toDouble(), matched.toDouble() + literal))).toInt().coerceIn(0, barWidth) else barWidth
+            listOf(RowSegment("|".repeat(matchedWidth), TextColor.ANSI.CYAN), RowSegment("|".repeat(barWidth - matchedWidth), TextColor.ANSI.GREEN))
+        } else listOf(RowSegment(bar, when {
                 failed -> TextColor.ANSI.RED
                 preparing -> TextColor.ANSI.WHITE
                 else -> TextColor.ANSI.GREEN
-            }),
+            }))
+        return listOf(RowSegment("%03d [".format(worker.id))) + barSegments + listOf(
             RowSegment("]" + tail(percent, MonitorModel.bytes(task?.task?.size), task?.let(MonitorModel::rate) ?: "--/s", eta)),
         )
     }

@@ -7,8 +7,11 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 
 fun main(args: Array<String>) {
+    var exitCode = 0
     try { launch(args.toList()) }
-    catch (e: Exception) { System.err.println("Airlift: ${e.message}"); kotlin.system.exitProcess(1) }
+    catch (e: Exception) { System.err.println("Airlift: ${e.message}"); exitCode = 1 }
+    finally { SshAuthentication.clearPassword() }
+    if (exitCode != 0) kotlin.system.exitProcess(exitCode)
 }
 
 private fun launch(args: List<String>) {
@@ -29,6 +32,9 @@ private fun launch(args: List<String>) {
             Without --files: discover source files. Mask + --files: union without duplicates.
             With --files and no mask: use only the list. All sizes are collected before copying.
             Tasks run largest first. Remote discovery requires GNU find over SSH.
+            --batch-min-size SIZE fills each rsync job to SIZE or more (default 5MiB; MB is decimal).
+            Confirm From/To before real transfers; --yes skips confirmation for automation.
+            MC /sh://user@host/path endpoints are recognized automatically (--mc is optional).
             --demo is simulated data, not network traffic. No arguments starts no transfers.
             SOURCE DESTINATION starts real transfers and opens the monitor (--run is optional).
             Remote endpoint: user@host:/directory/. Swap the paths to reverse direction.
@@ -63,6 +69,10 @@ private fun launch(args: List<String>) {
         direction = roots.direction,
         rsyncOptions = options["--rsync"],
     ) }
+    if (!demo && !confirmTransfer(arguments.paths, "--yes" in enabled, "--swing" in enabled)) {
+        println("Synchronization cancelled. No transfers started.")
+        return
+    }
     val plan = if (demo) PreparedTransfer(initialConfig, (1..48).map { TransferTask("demo/folder-${it % 4}/file-$it.bin", (20 + it % 7) * 1024L * 1024) })
         else {
             checkSshConnection(initialConfig)
@@ -71,7 +81,8 @@ private fun launch(args: List<String>) {
                 .also { println("Prepared ${it.tasks.size} files, ${it.tasks.sumOf { task -> requireNotNull(task.size) }} bytes; largest first.") }
         }
     val config = plan.config
-    val tasks = plan.tasks
+    val tasks = if (demo) plan.tasks else batchSmallFiles(plan.tasks, batchSize(options["--batch-min-size"] ?: "5MiB"))
+    if (!demo) println("${plan.tasks.size} files scheduled in ${tasks.size} rsync jobs.")
     val endpoint = monitorEndpoint(options["--endpoint"], if (demo) config.localRoot.parent else null)
     val dispatcher = if (demo) AirliftDispatcher(config, tasks, demoSessions()) else AirliftDispatcher(config, tasks)
     val source = DispatcherMonitorSource(dispatcher, if (demo) "RSYNC AIRLIFT | DEMO - SIMULATED DATA" else "RSYNC AIRLIFT",

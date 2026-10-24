@@ -27,7 +27,7 @@ class DismissFailedWorkerTest {
         assertEquals(listOf(1), model.visibleWorkers(source.state).map { it.id })
         assertTrue(source.requested.isEmpty())
         model.handle('-', source)
-        assertEquals(listOf(2), source.requested)
+        assertEquals(listOf(1), source.requested)
         model.view = MonitorView.ERRORS
         assertEquals(2, model.rows(source.state).size)
         assertEquals(3, source.state.workers.size)
@@ -39,5 +39,26 @@ class DismissFailedWorkerTest {
         repeat(3) { model.handle('-', source) }
         assertEquals(listOf(1), model.rows(source.state).map { it.workerId })
         assertTrue(source.requested.isEmpty())
+    }
+
+    @Test fun `plus adds only one worker after four failed rows were dismissed`() {
+        val workers = (1..6).map { WorkerState(it, WorkerStatus.TRANSFERRING) } +
+            (7..10).map { WorkerState(it, WorkerStatus.FAILED, error = "SSH failed") }
+        val source = Source(AirliftSnapshot(emptyList(), workers, false, false, targetWorkers = 10))
+        val model = MonitorModel()
+        repeat(4) { model.handle('-', source) }
+        assertTrue(source.requested.isEmpty())
+        model.handle('+', source)
+        assertEquals(listOf(7), source.requested)
+        source.requested.clear()
+        model.handle('-', source)
+        assertEquals(listOf(5), source.requested)
+    }
+
+    @Test fun `plus cancels one pending retirement rather than adding above the live count`() {
+        val workers = (1..6).map { WorkerState(it, WorkerStatus.TRANSFERRING) }
+        val source = Source(AirliftSnapshot(emptyList(), workers, false, false, targetWorkers = 4))
+        MonitorModel().handle('+', source)
+        assertEquals(listOf(5), source.requested)
     }
 }

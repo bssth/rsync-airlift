@@ -14,6 +14,7 @@ internal data class TransferRoots(val host: String, val remoteRoot: String, val 
         }
         fun parse(paths: List<String>): TransferRoots {
             require(paths.size == 2) { "Expected SOURCE DESTINATION, with exactly one remote path user@host:/directory/" }
+            val endpoints = paths.map(::normalizeEndpoint)
             fun remote(path: String): Pair<String, String>? {
                 if (Regex("^[A-Za-z]:[\\\\/].*").matches(path)) return null
                 if (':' !in path) return null
@@ -22,11 +23,11 @@ internal data class TransferRoots(val host: String, val remoteRoot: String, val 
                 val host = match.groupValues[1] + match.groupValues[2].ifEmpty { match.groupValues[3] }
                 return host to match.groupValues[4]
             }
-            val source = if (paths[0].startsWith("./") || paths[0].startsWith('/')) null else remote(paths[0])
-            val destination = if (paths[1].startsWith("./") || paths[1].startsWith('/')) null else remote(paths[1])
+            val source = if (endpoints[0].startsWith("./") || endpoints[0].startsWith('/')) null else remote(endpoints[0])
+            val destination = if (endpoints[1].startsWith("./") || endpoints[1].startsWith('/')) null else remote(endpoints[1])
             require((source == null) != (destination == null)) { "Exactly one endpoint must be remote (user@host:/directory/)." }
-            return if (source != null) TransferRoots(source.first, source.second, paths[1], TransferDirection.DOWNLOAD)
-                else TransferRoots(destination!!.first, destination.second, paths[0], TransferDirection.UPLOAD)
+            return if (source != null) TransferRoots(source.first, source.second, endpoints[1], TransferDirection.DOWNLOAD)
+                else TransferRoots(destination!!.first, destination.second, endpoints[0], TransferDirection.UPLOAD)
         }
     }
 }
@@ -34,8 +35,8 @@ internal data class TransferRoots(val host: String, val remoteRoot: String, val 
 internal data class LaunchArguments(val options: Map<String, String>, val enabled: Set<String>, val paths: List<String>) {
     companion object {
         fun parse(args: List<String>): LaunchArguments {
-            val flags = setOf("--demo", "--serve-demo", "--serve", "--run", "--null", "--swing")
-            val names = setOf("--attach", "--endpoint", "--files", "--workers", "--port", "--identity", "--rsync")
+            val flags = setOf("--demo", "--serve-demo", "--serve", "--run", "--null", "--swing", "--yes", "--mc")
+            val names = setOf("--attach", "--endpoint", "--files", "--workers", "--port", "--identity", "--rsync", "--batch-min-size")
             val options = mutableMapOf<String, String>()
             val enabled = mutableSetOf<String>()
             val paths = mutableListOf<String>()
@@ -64,7 +65,8 @@ internal data class LaunchArguments(val options: Map<String, String>, val enable
                 }
                 require("--swing" !in enabled || enabled.any { it in setOf("--demo", "--run") }) { "--swing requires an interactive mode" }
             }
-            return LaunchArguments(options, enabled, paths)
+            options["--batch-min-size"]?.let(::batchSize)
+            return LaunchArguments(options, enabled, paths.map(::normalizeEndpoint))
         }
     }
 }

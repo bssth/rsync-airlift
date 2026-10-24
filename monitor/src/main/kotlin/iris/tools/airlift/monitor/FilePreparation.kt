@@ -129,7 +129,7 @@ private fun readInventory(config: AirliftConfig, source: String): FileInventory 
     val errors = Files.createTempFile("airlift-inventory-", ".log")
     var process: Process? = null
     try {
-        process = ProcessBuilder(SshAuthentication.command(command)).redirectError(errors.toFile()).start()
+        process = SshAuthentication.configure(ProcessBuilder(SshAuthentication.command(command))).redirectError(errors.toFile()).start()
         val records = mutableListOf<String>()
         process.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
             val record = StringBuilder()

@@ -41,9 +41,11 @@ data class OverallBreakdown(
                 val weight = (if (byBytes) task.task.size!!.toDouble() else 1.0) / denominator
                 if (task.status == TaskStatus.FAILED) { failed += weight; continue }
                 if (task.status != TaskStatus.SUCCEEDED) continue
-                val m = task.progress?.matchedBytes
+                val rawMatched = task.progress?.matchedBytes
                 val l = task.progress?.literalBytes
-                if (m == null || l == null || m < 0 || l < 0) continue
+                if (rawMatched == null || l == null || rawMatched < 0 || l < 0) continue
+                val m = if (task.task.files.isNotEmpty() && task.task.size != null)
+                    rawMatched + (requireNotNull(task.task.size) - rawMatched - l).coerceAtLeast(0) else rawMatched
                 // UI Matched includes successful files requiring no data transfer;
                 // this describes avoided transfer, not a checksum verification.
                 if (m == 0L && l == 0L) {

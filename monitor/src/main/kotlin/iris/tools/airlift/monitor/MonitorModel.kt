@@ -75,6 +75,11 @@ class MonitorModel {
 
     fun handle(command: Char, source: MonitorSource) {
         val snapshot = source.snapshot()
+        // A failed connection leaves targetWorkers above the live pool. Do not
+        // backfill that entire gap when the user asks for a single extra worker.
+        val live = snapshot.workers.count { it.status in setOf(WorkerStatus.CONNECTING, WorkerStatus.IDLE, WorkerStatus.TRANSFERRING) }
+        val adjustableWorkers = if (snapshot.workers.any { it.status == WorkerStatus.FAILED })
+            minOf(snapshot.targetWorkers, live) else snapshot.targetWorkers
         when (command.lowercaseChar()) {
             '1' -> { view = MonitorView.WORKERS; selected = 0 }
             '2' -> { view = MonitorView.QUEUE; selected = 0 }
@@ -82,13 +87,13 @@ class MonitorModel {
             'p' -> if (snapshot.finishedAtMillis == null) {
                 if (snapshot.paused) source.resume() else source.pause()
             }
-            '+', '=' -> if (snapshot.finishedAtMillis == null) source.setWorkerCount(snapshot.targetWorkers + 1)
+            '+', '=' -> if (snapshot.finishedAtMillis == null) source.setWorkerCount(adjustableWorkers + 1)
             '-' -> {
                 val failed = visibleWorkers(snapshot).filter { it.status == WorkerStatus.FAILED }.minByOrNull { it.id }
                 if (failed != null) {
                     dismissedFailedWorkers.add(failed.id)
                     mouseRows.clear()
-                } else if (snapshot.finishedAtMillis == null) source.setWorkerCount((snapshot.targetWorkers - 1).coerceAtLeast(1))
+                } else if (snapshot.finishedAtMillis == null) source.setWorkerCount((adjustableWorkers - 1).coerceAtLeast(1))
             }
         }
     }

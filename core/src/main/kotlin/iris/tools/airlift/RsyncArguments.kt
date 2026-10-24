@@ -42,6 +42,8 @@ object RsyncCommand {
         add(config.rsyncExecutable)
         addAll(config.rsyncOptions?.let(RsyncArguments::parse).orEmpty())
         addAll(listOf("--relative", "--protect-args", "--from0", "--files-from=-", "--info=progress2", "--outbuf=L", "--stats"))
+        add("--info=name1")
+        add("--out-format=AIRLIFT_FILE:%n")
         addAll(listOf("-e", transport, "--", source, destination))
     }
 }

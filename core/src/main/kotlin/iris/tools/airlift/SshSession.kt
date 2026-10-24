@@ -24,7 +24,7 @@ private class SshSession(private val config: AirliftConfig) : TransferSession {
 
     private fun launch(command: List<String>, output: Path? = null): Process = synchronized(lock) {
         check(!closed) { "SSH session is closed" }
-        val builder = ProcessBuilder(command).redirectErrorStream(true)
+        val builder = SshAuthentication.configure(ProcessBuilder(command)).redirectErrorStream(true)
         builder.environment()["LC_ALL"] = "C"
         if (output != null) builder.redirectOutput(output.toFile())
         builder.start().also { processes.add(it) }
@@ -62,10 +62,19 @@ private class SshSession(private val config: AirliftConfig) : TransferSession {
         val command = RsyncCommand.build(config, transport, source, destination)
         Files.newBufferedWriter(logFile).use { log ->
             val process = launch(command)
+            val inputFailure = java.util.concurrent.atomic.AtomicReference<Exception?>()
+            // Feed the list while draining output: long lists must not deadlock
+            // when rsync produces output before it has consumed all stdin.
+            val writer = kotlin.concurrent.thread(name = "airlift-rsync-list", isDaemon = true) {
+                try {
+                    process.outputStream.use { output ->
+                        (task.files.ifEmpty { listOf(task.path) }).forEach { output.write((it + '\u0000').toByteArray(Charsets.UTF_8)) }
+                    }
+                } catch (e: Exception) { inputFailure.set(e) }
+            }
             try {
-                process.outputStream.use { it.write((task.path + '\u0000').toByteArray(Charsets.UTF_8)) }
                 process.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                    val parser = RsyncOutputParser()
+                    val parser = RsyncOutputParser(task.files.ifEmpty { listOf(task.path) }.toSet())
                     val record = StringBuilder()
                     while (true) {
                         val value = reader.read()
@@ -82,7 +91,10 @@ private class SshSession(private val config: AirliftConfig) : TransferSession {
                     }
                     parser.parse(record.toString())?.let(progress)
                 }
-                return process.waitFor()
+                val code = process.waitFor()
+                writer.join()
+                if (code == 0) inputFailure.get()?.let { throw it }
+                return code
             } finally {
                 if (process.isAlive) { process.destroyForcibly(); process.waitFor() }
                 forget(process)

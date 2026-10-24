@@ -120,7 +120,8 @@ class AirliftDispatcher(
                             }
                         }
                         success = code == 0
-                        error = if (success) null else "rsync exited with code $code"
+                        error = if (success) null else "rsync exited with code $code" +
+                            if (task.fileCount > 1) "; batch of ${task.fileCount} files has unconfirmed outcomes; retry the batch" else ""
                     } catch (e: Exception) {
                         error = e.message ?: e.javaClass.simpleName
                     }
@@ -141,6 +142,9 @@ class AirliftDispatcher(
                     val finalProgress = if (success && !cancelled) {
                         (current.progress ?: TransferProgress(size ?: 0, null, null)).copy(
                             logicalBytes = size ?: current.progress?.logicalBytes ?: 0,
+                            matchedBytes = if (task.fileCount > 1 && size != null && current.progress?.matchedBytes != null && current.progress.literalBytes != null)
+                                current.progress.matchedBytes + (size - current.progress.matchedBytes - current.progress.literalBytes).coerceAtLeast(0)
+                                else current.progress?.matchedBytes,
                             bytesPerSecond = size?.toDouble()?.div(elapsedSeconds),
                             remainingSeconds = null, percent = 100,
                         )

@@ -32,7 +32,7 @@ class RsyncArgumentsTest {
     @Test fun `no copy policy is injected when options are omitted or empty`() {
         for (options in listOf(null, "")) {
             val command = RsyncCommand.build(AirliftConfig("user@host", "/source", Path.of("dest"), rsyncOptions = options), "ssh", "source", "dest")
-            assertEquals(listOf("rsync", "--relative", "--protect-args", "--from0", "--files-from=-", "--info=progress2", "--outbuf=L", "--stats", "-e", "ssh", "--", "source", "dest"), command)
+            assertEquals(listOf("rsync", "--relative", "--protect-args", "--from0", "--files-from=-", "--info=progress2", "--outbuf=L", "--stats", "--info=name1", "--out-format=AIRLIFT_FILE:%n", "-e", "ssh", "--", "source", "dest"), command)
         }
     }
 }

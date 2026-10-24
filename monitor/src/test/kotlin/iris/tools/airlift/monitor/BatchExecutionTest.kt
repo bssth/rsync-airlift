@@ -1,0 +1,54 @@
+package iris.tools.airlift.monitor
+
+import iris.tools.airlift.*
+import com.googlecode.lanterna.TextColor
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.concurrent.TimeUnit
+import kotlin.test.*
+
+class BatchExecutionTest {
+    @Test fun `one batch invokes one session transfer counts files and includes skipped bytes in matched`() {
+        val root = Files.createTempDirectory("airlift-batch-")
+        try {
+            val task = TransferTask("a", 1000, files = listOf("a", "b", "c"))
+            var calls = 0
+            val factory = TransferSessionFactory {
+                object : TransferSession {
+                    override fun connect() {}
+                    override fun close() {}
+                    override fun transfer(task: TransferTask, logFile: Path, progress: (TransferProgress) -> Unit): Int {
+                        calls++
+                        assertEquals(listOf("a", "b", "c"), task.files)
+                        progress(TransferProgress(500, 100.0, 0, matchedBytes = 400, literalBytes = 100, currentFile = "b", transferredFiles = 1))
+                        return 0
+                    }
+                }
+            }
+            AirliftDispatcher(AirliftConfig("user@host", "/source", root, workers = 1, logDirectory = root.resolve("logs")), listOf(task), factory).use { dispatcher ->
+                val final = dispatcher.start().get(5, TimeUnit.SECONDS)
+                assertEquals(1, calls)
+                assertEquals(3, final.completed)
+                assertEquals(900L, final.tasks.single().progress?.matchedBytes)
+                assertEquals(100L, final.tasks.single().progress?.literalBytes)
+                val parts = WorkerLineLayout(88).segments(final.workers.single(), final.tasks.single())
+                assertTrue(parts.any { it.color == TextColor.ANSI.CYAN && it.text.contains('|') })
+                assertTrue(parts.any { it.color == TextColor.ANSI.GREEN && it.text.contains('|') })
+                val endpoint = root.resolve("connection")
+                val source = object : MonitorSource {
+                    override fun snapshot() = final
+                    override fun pause() {}
+                    override fun resume() {}
+                    override fun setWorkerCount(count: Int) {}
+                }
+                MonitorServer(source, endpoint).use {
+                    val remote = RemoteMonitorSource(endpoint).snapshot()
+                    assertEquals(3, remote.completed)
+                    assertEquals(task.files, remote.tasks.single().task.files)
+                    assertEquals("b", remote.tasks.single().progress?.currentFile)
+                    assertEquals(1, remote.tasks.single().progress?.transferredFiles)
+                }
+            }
+        } finally { root.toFile().deleteRecursively() }
+    }
+}

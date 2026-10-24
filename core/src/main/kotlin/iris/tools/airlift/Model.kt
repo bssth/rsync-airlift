@@ -2,7 +2,9 @@ package iris.tools.airlift
 
 /** Paths are relative to the roots. sourceRoot optionally overrides only the source for this task.
  * Input order is preserved; id and destination path must be unique across the transfer. */
-data class TransferTask(val path: String, val size: Long? = null, val id: String = path, val sourceRoot: String? = null) {
+data class TransferTask(val path: String, val size: Long? = null, val id: String = path, val sourceRoot: String? = null,
+    val files: List<String> = emptyList()) {
+    val fileCount: Int get() = files.size.coerceAtLeast(1)
     init {
         require(id.isNotBlank()) { "Task id must not be blank" }
         require(path.isNotEmpty() && !path.startsWith('/') && '\u0000' !in path && path.split('/').none { it == ".." || it == "." || it.isEmpty() }) {
@@ -10,6 +12,8 @@ data class TransferTask(val path: String, val size: Long? = null, val id: String
         }
         require(size == null || size >= 0)
         require(sourceRoot == null || (sourceRoot.isNotEmpty() && '\u0000' !in sourceRoot))
+        files.forEach { require(it.isNotEmpty() && !it.startsWith('/') && '\u0000' !in it && it.split('/').none { part -> part in listOf("", ".", "..") }) }
+        require(files.distinct().size == files.size)
     }
 }
 
@@ -45,6 +49,7 @@ data class AirliftConfig(
 data class TransferProgress(
     val logicalBytes: Long, val bytesPerSecond: Double?, val remainingSeconds: Long?, val percent: Int? = null,
     val matchedBytes: Long? = null, val literalBytes: Long? = null,
+    val currentFile: String? = null, val transferredFiles: Int? = null,
 )
 data class TaskState(
     val task: TransferTask,
@@ -62,9 +67,9 @@ data class AirliftSnapshot(
     val startedAtMillis: Long? = null,
     val finishedAtMillis: Long? = null,
 ) {
-    val queued: Int get() = tasks.count { it.status == TaskStatus.QUEUED }
-    val completed: Int get() = tasks.count { it.status == TaskStatus.SUCCEEDED }
-    val failed: Int get() = tasks.count { it.status == TaskStatus.FAILED }
+    val queued: Int get() = tasks.filter { it.status == TaskStatus.QUEUED }.sumOf { it.task.fileCount }
+    val completed: Int get() = tasks.filter { it.status == TaskStatus.SUCCEEDED }.sumOf { it.task.fileCount }
+    val failed: Int get() = tasks.filter { it.status == TaskStatus.FAILED }.sumOf { it.task.fileCount }
 }
 
 /** One session per worker. Implementations must unblock transfer/connect when close is called. */
