@@ -1,9 +1,113 @@
 # Rsync Airlift
 
-Kotlin 2.1.21 / JVM 21 library for parallel file transfers via rsync and SSH ControlMaster.
+### The power of rsync. Multiplied.
 
-- `core`: accepts a caller-provided list, owns the queue and worker connections.
-- `monitor`: Lanterna TUI, local monitoring service, attach client and simulation mode.
+**Rsync is brilliant. Give it a crew.**
+
+Rsync can reconcile enormous files while transferring only the parts that changed.
+That makes it an excellent tool for moving large datasets, repeating synchronization
+passes, and preparing a server migration while most of the service remains online.
+
+But a directory full of large files also contains an opportunity: independent files
+can be processed at the same time. When one rsync process leaves CPU, storage, or
+network capacity available, several processes can put more of that capacity to work.
+
+Rsync Airlift coordinates that work. It runs the original rsync through a pool of
+SSH ControlMaster connections, feeds files to available workers, and shows the
+operation in an interactive terminal monitor inspired by `htop`.
+
+You still choose the files, endpoints, and rsync options. Airlift manages the queue,
+the workers, and the view of what is happening.
+
+## Born from a production migration
+
+Airlift began with a real migration: approximately **1.16 TB of MyISAM database
+files**, a changing production service, and a limited window for downtime.
+
+The approach was to copy ahead of the move, repeat synchronization passes to reduce
+the remaining differences, then stop MySQL and perform the final pass against
+stable files before switching production to the destination.
+
+The preliminary copies were only preparation. A copy of a running MyISAM database
+is **not an application-consistent backup**. The final synchronization required
+stopping the database so its files would stop changing.
+
+A small Kotlin dispatcher gave multiple rsync processes their own SSH connections
+and a shared queue of files. As soon as a worker finished, it took the next file.
+Large files went first, reducing the chance of ending with one enormous file while
+every other worker sat idle.
+
+The migration used **16 workers**, reached **up to 900 Mbit/s on a 1 Gbit/s link**,
+and finished with **12 minutes of downtime**.
+
+That does not mean a terabyte crossed the network in twelve minutes. Most of the
+data had already been copied. The downtime covered the final reconciliation and
+the production switch. Reducing that last stretch of work was the point.
+
+## A small core, a clear view
+
+The original dispatcher did its job. The next question was how to see what all
+those workers were doing without following a pile of separate logs.
+
+That became the Airlift monitor: individual progress bars, file sizes, speeds,
+estimated completion times, queue and error views, and a details panel for the
+selected worker. You can change concurrency while a run is active, pause the
+assignment of new files, or detach the panel and attach again later.
+
+The overall bar separates data that did not need to be sent from newly transferred
+file data and failures. `Matched` includes unchanged files that rsync skipped;
+it does not imply that every byte was checksum-verified. `Processed` and the
+displayed speeds describe logical file processing, not measured network traffic.
+
+The project has two Kotlin/JVM modules:
+
+- **`core`** accepts a prepared list of files, owns the queue, and manages worker
+  connections. Applications can supply their own selection and ordering.
+- **`monitor`** provides the command-line launcher, file discovery, size collection,
+  largest-first scheduling, an attachable monitoring service, and the Lanterna TUI.
+
+This separation keeps the library useful beyond the migration that inspired it.
+The input can be database files, archives, media, or any other list of files.
+Application-specific selection belongs to the caller; Airlift handles dispatch.
+
+## What parallelism changed in practice
+
+In subsequent experiments on a dataset of approximately **127.6 GiB across 1,003
+files**, a one-worker run took **6:34**. A six-worker run took **1:29** — an observed
+**4.43× reduction in elapsed time**. Further runs included **2:09 with six workers**
+and **1:35 with twelve**.
+
+These were practical migration experiments, not a controlled benchmark. The amount
+of changed data differed between runs, and filesystem caching may have influenced
+the results. They demonstrate the benefit on this workload, not a universal speedup
+or a promise that adding workers always helps.
+
+Parallelism is most useful when there are several substantial files and spare
+resources to process them. If the network or storage is already saturated, more
+workers may add contention. Each file is still handled by one rsync process:
+Airlift does not split a single file between workers.
+
+For a final synchronization, the useful measure is often the time between stopping
+writers and bringing production back. On this workload, making independent files
+progress together shortened that wait considerably.
+
+## Built around rsync
+
+Airlift keeps rsync responsible for its delta-transfer algorithm and file-copying
+behavior. Copy options are supplied through `--rsync`; the dispatcher adds the
+transport and reporting arguments it needs to manage individual jobs.
+
+It also leaves consistency to the application. For databases, virtual machines,
+and other actively changing datasets, arrange a consistent snapshot or a coordinated
+shutdown before treating the result as authoritative. A successful file transfer
+alone cannot establish that consistency.
+
+The aim is straightforward: keep available workers busy, make the operation easy
+to understand, and reduce the time spent waiting for synchronization to finish.
+
+**Move terabytes. Keep downtime short.**
+
+*Built with Kotlin. Powered by rsync. Inspired by a real production migration.*
 
 ## Build
 
