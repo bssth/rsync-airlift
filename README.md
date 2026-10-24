@@ -19,6 +19,35 @@ operation in an interactive terminal monitor inspired by `htop`.
 You still choose the files, endpoints, and rsync options. Airlift manages the queue,
 the workers, and the view of what is happening.
 
+## Why Airlift?
+
+Parallel rsync is an established approach. Airlift brings visibility, live control,
+and file scheduling together in one terminal workflow.
+
+- **See the whole operation.** An `htop`-inspired dashboard shows each worker's
+  file progress, size, speed, and ETA alongside the queue and errors. Overall
+  statistics distinguish matched data from newly transferred data, with elapsed
+  time and an average processing rate at completion. Select a worker to inspect
+  its current file and error details.
+- **Adjust the run as it happens.** Increase or decrease concurrency from the
+  keyboard, pause the assignment of new files while active transfers finish,
+  and resume the queue when ready. Detach the monitor and attach again to the
+  running dispatcher. Each attempt has a raw rsync log; after an interruption,
+  rerun the command and let rsync reconcile the destination using the options
+  you supplied.
+- **Put available resources to work.** The CLI collects file sizes before
+  transfer and schedules the largest files first. A shared queue feeds each
+  available worker its next file, while each worker reuses its SSH ControlMaster
+  connection across tasks. This can reduce waiting on workloads with independent
+  files and spare CPU, storage, or network capacity; it does not guarantee a
+  speedup when those resources are already saturated.
+
+The goal is to make parallel synchronization easy to watch and control while
+keeping rsync's behavior and your choice of copy options at the center.
+Each file is processed by one worker; splitting a single file across CPU cores
+is not implemented. Run logs are available, but a persistent job history and
+dispatcher checkpoints are not implemented either.
+
 ![Rsync Airlift terminal monitor showing parallel file synchronization in progress](docs/images/airlift-in-process.png)
 
 *Parallel synchronization in progress: per-worker progress, file sizes, speeds,
