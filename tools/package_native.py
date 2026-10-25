@@ -15,7 +15,22 @@ import tarfile
 def archive(entries, epoch):
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as tar:
+        directories = set()
         for name, content, mode in entries:
+            # dpkg requires explicit directories before their children; unlike
+            # tar extraction, package installation does not create them implicitly.
+            parents = list(Path(name).parents)
+            for parent in reversed(parents):
+                directory = parent.as_posix()
+                if directory == "." or directory in directories:
+                    continue
+                info = tarfile.TarInfo(directory + "/")
+                info.type = tarfile.DIRTYPE
+                info.mode, info.mtime = 0o755, epoch
+                info.uid = info.gid = 0
+                info.uname = info.gname = "root"
+                tar.addfile(info)
+                directories.add(directory)
             info = tarfile.TarInfo(name)
             info.size, info.mode, info.mtime = len(content), mode, epoch
             info.uid = info.gid = 0

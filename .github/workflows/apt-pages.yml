@@ -30,7 +30,7 @@ jobs:
               raise SystemExit('Invalid Debian version')
           PY
       - name: Check repository generator
-        run: python -m unittest discover -s tools -p test_apt_repository.py
+        run: python -m unittest discover -s tools -p 'test_*.py'
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
