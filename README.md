@@ -2,6 +2,27 @@
 
 ### The power of rsync. Multiplied.
 
+## Contents
+
+- [Install with APT](#install-with-apt)
+- [Why Airlift?](#why-airlift)
+- [Born from a production migration](#born-from-a-production-migration)
+- [A small core, a clear view](#a-small-core-a-clear-view)
+- [What parallelism changed in practice](#what-parallelism-changed-in-practice)
+- [Built around rsync](#built-around-rsync)
+- [Build and deployment](#build-and-deployment)
+- [Quick start](#quick-start)
+- [SSH authentication](#ssh-authentication)
+- [File selection and destination paths](#file-selection-and-destination-paths)
+- [Scheduling, batching and directory collapse](#scheduling-batching-and-directory-collapse)
+- [Rsync options](#rsync-options)
+- [Terminal monitor](#terminal-monitor)
+- [Background dispatch and attaching](#background-dispatch-and-attaching)
+- [Midnight Commander](#midnight-commander)
+- [Core library](#core-library)
+- [Logs, resuming and consistency](#logs-resuming-and-consistency)
+- [Validation](#validation)
+
 **Rsync is brilliant. Give it a crew.**
 
 Rsync can reconcile enormous files while transferring only the parts that changed.
@@ -18,6 +39,31 @@ operation in an interactive terminal monitor inspired by `htop`.
 
 You still choose the files, endpoints, and rsync options. Airlift manages the queue,
 the workers, and the view of what is happening.
+
+## Install with APT
+
+For **Debian/Ubuntu on amd64 (x86-64)**. No Java runtime required.
+Add the signed repository once and install:
+
+```bash
+sudo apt update &&
+sudo apt install -y ca-certificates curl &&
+sudo install -d -m 755 /etc/apt/keyrings &&
+curl -fsSLo /tmp/rsync-airlift-archive-keyring.gpg \
+  https://iris4iris.github.io/rsync-airlift/rsync-airlift-archive-keyring.gpg &&
+sudo install -m 644 /tmp/rsync-airlift-archive-keyring.gpg \
+  /etc/apt/keyrings/rsync-airlift.gpg &&
+echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/rsync-airlift.gpg] https://iris4iris.github.io/rsync-airlift/ stable main' \
+  | sudo tee /etc/apt/sources.list.d/rsync-airlift.list &&
+sudo apt update &&
+sudo apt install -y rsync-airlift
+```
+
+Installation does not start a transfer. Future updates arrive through normal
+`sudo apt update` and `sudo apt upgrade`. For SSH password authentication,
+also install `sshpass`; SSH keys do not require it.
+Installation and demo startup have been verified on Ubuntu 18.04 amd64.
+See [APT repository setup](docs/APT.md) for maintainer instructions.
 
 ## Why Airlift?
 
@@ -164,13 +210,6 @@ to understand, and reduce the time spent waiting for synchronization to finish.
 **Move terabytes. Keep downtime short.**
 
 *Built with Kotlin. Powered by rsync. Inspired by a real production migration.*
-
-## APT installation
-
-A signed Debian/Ubuntu amd64 repository on GitHub Pages is prepared for publication.
-After its first deployment, users can add it once and install/update with APT.
-See [APT setup and installation](docs/APT.md) for the maintainer configuration,
-signing key setup and user commands. The repository is not live until deployed.
 
 ## Build and deployment
 
