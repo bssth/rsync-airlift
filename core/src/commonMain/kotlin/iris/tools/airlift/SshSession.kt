@@ -29,6 +29,8 @@ private class SshSession(
     private val authentication: ProcessAuthentication, private val paths: DispatcherPaths,
     private val clock: DispatcherClock, private val directory: Path,
 ) : TransferSession {
+    override var failureDetails: String? = null
+        private set
     private val mutex = Mutex()
     private val cleanup = Mutex()
     private var closed = false
@@ -74,6 +76,7 @@ private class SshSession(
     }
 
     override suspend fun transfer(task: TransferTask, logFile: Path, progress: suspend (TransferProgress) -> Unit): Int {
+        failureDetails = null
         files.createDirectories(config.localRoot)
         val transport = (base + listOf("-S", socket.toString(), "-o", "ControlMaster=no", "-o", "ProxyCommand=false"))
             .joinToString(" ") { quote(it) }
@@ -110,6 +113,12 @@ private class SshSession(
                     val output = requireNotNull(process.stdout)
                     val parser = RsyncOutputParser(task.files.ifEmpty { listOf(task.path) }.toSet())
                     val record = Buffer()
+                    val diagnostics = RsyncDiagnostics()
+                    suspend fun consumeRecord() {
+                        val text = record.readByteArray().decodeToString()
+                        diagnostics.accept(text)
+                        parser.parse(text)?.let { progress(it) }
+                    }
                     val bytes = ByteArray(8192)
                     while (true) {
                         val count = output.read(bytes)
@@ -118,13 +127,14 @@ private class SshSession(
                         for (index in 0 until count) {
                             val byte = bytes[index]
                             if (byte == 13.toByte() || byte == 10.toByte()) {
-                                parser.parse(record.readByteArray().decodeToString())?.let { progress(it) }
+                                consumeRecord()
                             } else if (record.size < 65536) record.writeByte(byte)
                         }
                         log.flush()
                     }
-                    parser.parse(record.readByteArray().decodeToString())?.let { progress(it) }
+                    consumeRecord()
                     val code = process.awaitExit()
+                    if (code != 0) failureDetails = diagnostics.summary()
                     val inputFailure = writer.await()
                     if (code == 0 && inputFailure != null) throw inputFailure
                     code

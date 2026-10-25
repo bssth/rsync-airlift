@@ -749,7 +749,9 @@ manifest classpaths and monitor connection protocol are unchanged. The Linux tar
 
 Each run creates a unique directory under `AirliftConfig.logDirectory` (CLI default:
 `airlift-logs/` in the working directory). Each job attempt has one raw rsync log.
-Logs are available on disk; raw output and log paths are not shown in the panel.
+Logs are available on disk. Failed transfers show a bounded diagnostic from the
+original rsync/SSH output in DETAILS, followed by the exit code. Full raw output
+and log paths are not shown in the panel.
 
 The queue and results are in memory: there is no persistent checkpoint or job-history
 database. After an interruption, rerun the selection and let rsync reconcile the

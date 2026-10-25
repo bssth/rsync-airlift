@@ -15,6 +15,8 @@ interface DispatcherLogStore {
 
 /** One transport per worker. close() must be idempotent and unblock connect/transfer. */
 interface TransferSession {
+    /** Diagnostic for the last transfer; reset before each attempt. */
+    val failureDetails: String? get() = null
     suspend fun connect()
     suspend fun transfer(task: TransferTask, logFile: Path, progress: suspend (TransferProgress) -> Unit): Int
     suspend fun close()

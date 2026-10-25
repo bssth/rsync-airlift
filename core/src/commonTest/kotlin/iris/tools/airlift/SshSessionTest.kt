@@ -87,6 +87,25 @@ class SshSessionTest {
         assertTrue(children.all { it.closed })
     }
 
+    @Test fun `failed transfer reports original split output and clears it on next attempt`() = runTest {
+        val files = Files()
+        var attempt = 0
+        val session = factory(files, ProcessLauncher { spec ->
+            if (spec.command.first() == "rsync") {
+                attempt++
+                if (attempt == 1) Child(127, "bash: rsync: command not found\r\nrsync error: remote command not found (code 127)")
+                else Child(0, "AIRLIFT_FILE:a\n")
+            } else Child(if ("-M" in spec.command) null else 0)
+        }).create(1)
+        try {
+            session.connect()
+            assertEquals(127, session.transfer(TransferTask("a"), Path("failed.log")) {})
+            assertEquals("bash: rsync: command not found", session.failureDetails)
+            assertEquals(0, session.transfer(TransferTask("a"), Path("retry.log")) {})
+            assertNull(session.failureDetails)
+        } finally { session.close() }
+    }
+
     @Test fun `cancelling transfer closes the child and log without a JVM process`() = runTest {
         val files = Files()
         val children = mutableListOf<Child>()

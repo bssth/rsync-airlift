@@ -39,6 +39,24 @@ class AirliftDispatcherTest {
         }
     }
 
+    @Test fun `original transfer error reaches failed batch snapshot before exit code`() = runTest {
+        val dispatcher = engine(listOf(TransferTask("a", 20, files = listOf("a", "b"))),
+            settings(workers = 1), factory = TransferSessionFactory {
+                object : TransferSession {
+                    override val failureDetails = "bash: rsync: command not found"
+                    override suspend fun connect() {}
+                    override suspend fun transfer(task: TransferTask, logFile: Path, progress: suspend (TransferProgress) -> Unit) = 127
+                    override suspend fun close() {}
+                }
+            })
+        try {
+            dispatcher.start()
+            val result = dispatcher.awaitCompletion().tasks.single()
+            assertEquals(TaskStatus.FAILED, result.status)
+            assertEquals("rsync: command not found (code 127).", result.error)
+        } finally { dispatcher.close() }
+    }
+
     @Test fun `source and destination descriptions belong to the shared dispatcher`() = runTest {
         for (direction in TransferDirection.entries) {
             val config = settings().copy(direction = direction)

@@ -162,8 +162,13 @@ class AirliftDispatcher(
                             }
                         }
                         success = code == 0
-                        error = if (success) null else "rsync exited with code $code" +
-                            if (task.fileCount > 1) "; batch of ${task.fileCount} files has unconfirmed outcomes; retry the batch" else ""
+                        val details = if (success) null else transport.failureDetails?.takeIf { it.isNotBlank() }
+                        error = if (success) null else {
+                            val reason = details?.replace(
+                                Regex("^(?:/[^ ]*/)?(?:bash|sh|dash|zsh|ksh): (?:line [0-9]+: )?"), ""
+                            )?.trimEnd('.', ' ')
+                            "${reason ?: "rsync failed"} (code $code)."
+                        }
                     } catch (e: CancellationException) {
                         // A transport-local timeout is an attempt failure, not cancellation of the run.
                         currentCoroutineContext().ensureActive()
