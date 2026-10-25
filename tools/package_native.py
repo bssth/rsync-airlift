@@ -70,7 +70,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: {args.maintainer}
 Installed-Size: {sum((len(content) + 1023) // 1024 for _, content, _ in data)}
-Depends: libc6 (>= 2.14), libgcc-s1, libcrypt1, rsync, openssh-client
+Depends: libc6 (>= 2.14), libgcc-s1 | libgcc1 (>= 1:4.2), libcrypt1 | libc6 (<< 2.29), rsync, openssh-client
 Suggests: sshpass
 Homepage: https://github.com/iris4iris/rsync-airlift
 Description: Parallel rsync dispatcher with an interactive terminal monitor

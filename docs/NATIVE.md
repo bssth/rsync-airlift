@@ -112,10 +112,11 @@ sudo apt install ./rsync-airlift_0.1.0~snapshot_amd64.deb
 rsync-airlift --demo
 ```
 
-The package declares `libc6 (>= 2.14)`, `libgcc-s1`, `libcrypt1`, `rsync` and
-`openssh-client` dependencies. `sshpass` is optional: install it for password
-authentication. This package targets distributions providing those package
-names, such as Debian 11+ and Ubuntu 20.04+. The ELF also uses the system's
+The package declares `libc6 (>= 2.14)`, `libgcc-s1 | libgcc1 (>= 1:4.2)`,
+`libcrypt1 | libc6 (<< 2.29)`, `rsync` and `openssh-client` dependencies.
+The alternatives account for older distributions using libgcc1 and shipping
+libcrypt.so.1 within libc6; newer distributions use separate packages. `sshpass` is optional: install it for password
+authentication. Runtime compatibility on each distribution still needs verification. The ELF also uses the system's
 standard glibc libraries; it is not a fully static binary or an Alpine/musl build.
 The symbol requirement was inspected with `readelf`; packaging refuses newer
 glibc symbol requirements until the dependency declaration is reviewed.
