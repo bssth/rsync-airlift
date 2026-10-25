@@ -22,6 +22,7 @@
 - [Core library](#core-library)
 - [Logs, resuming and consistency](#logs-resuming-and-consistency)
 - [Validation](#validation)
+- [Linux Native](#linux-native)
 
 **Rsync is brilliant. Give it a crew.**
 
@@ -767,27 +768,44 @@ selection and prompt flows, virtual-terminal rendering, mouse decoding, controls
 and the localhost attach protocol. Real SSH/rsync transfer experiments are described
 above; automated unit tests do not replace an integration test on your target hosts.
 
-### Linux Native work in progress
+## Linux Native
 
-Enable the Linux x64 targets explicitly while their adapters are under development:
+**A standalone Linux tool, around 3 MiB. No JVM required.**
+
+The optimized Linux x86-64 executable includes both the dispatcher and interactive
+terminal monitor. Install it from our signed [APT repository](#install-with-apt),
+or deploy the executable directly. `rsync` and OpenSSH remain external tools;
+password authentication also requires `sshpass`.
+
+Verified in practice:
+
+- A real SSH/rsync run completed **982 files / 113.9 GiB with zero failures**.
+- APT installation and demo startup succeeded on **Ubuntu 18.04 amd64**.
+- The first optimized executable measured **3,155,768 bytes (3.01 MiB)**,
+  compared with **8.25 MiB** for debug. Its Debian package is about **0.91 MiB**.
+- GitHub Actions runs Linux Native tests, installs the package, checks startup
+  and verifies the signed APT repository before publication. Checks requiring
+  an interactive PTY are skipped in headless test runs.
+
+Build the optimized Linux x64 executable:
 
 ```bash
-./gradlew -PenableLinuxNative=true :core:compileCommonMainKotlinMetadata :monitor:compileCommonMainKotlinMetadata
+./gradlew -PenableLinuxNative=true :monitor:linkReleaseExecutableLinuxX64
 ```
 
-Both common source sets pass metadata compilation independently of JVM code.
-This checks portable source/dependency metadata, not Linux linking or execution.
+Output: `monitor/build/bin/linuxX64/releaseExecutable/rsync-airlift.kexe`.
+Building requires a JDK; running the resulting executable does not.
 Linux core process and system adapters are implemented and its Native test executable
 can be linked. Linux monitor socket, console, inventory and application adapters are
 implemented. A Native ANSI terminal backend supports demo, attach and interactive
 transfers and has been verified on Linux with real SSH/rsync transfers. See [Linux Native](docs/NATIVE.md)
-for headless build and test commands. Default JVM builds remain unchanged.
-Linux compilation and runtime validation will be performed on a Linux server.
+for build, packaging and usage instructions. Default JVM builds remain available.
+Compilation and linking work on Windows too; the resulting ELF runs on Linux x86-64.
 
-Linux core tests can be built and run on the Linux server:
+Both modules' Native tests can be built and run on Linux:
 
 ```bash
-./gradlew -PenableLinuxNative=true :core:linuxX64Test
+./gradlew -PenableLinuxNative=true :core:linuxX64Test :monitor:linuxX64Test
 ```
 
 The test executable can also be cross-linked on Windows with
