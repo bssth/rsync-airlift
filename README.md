@@ -308,6 +308,13 @@ includes one failure, and gives each run a temporary endpoint by default.
 
 ## SSH authentication
 
+Worker connections open in waves of at most five (`AirliftConfig.connectConcurrency`).
+Every first connection attempt in a wave must finish before the next wave starts;
+connected workers can already transfer files. Workers added during a run use the
+same ordering. Retries and reconnects never run more than five handshakes at once
+either. This keeps startup below OpenSSH's default `MaxStartups 10` but does not
+guarantee acceptance by every server.
+
 Authentication is prepared once before opening the monitor:
 
 1. If `SSHPASS` exists in the environment, use `sshpass -e` with `BatchMode=no`.
@@ -328,9 +335,6 @@ fingerprint prompt. Changed host keys remain an error; Airlift does not silently
 replace them. For a headless run, establish the trusted host key beforehand.
 
 Each worker owns an independent SSH ControlMaster and reuses it across jobs.
-At most 8 workers authenticate at the same time (`AirliftConfig.connectConcurrency`),
-which keeps startup below OpenSSH's default `MaxStartups 10`, so sshd does not
-drop the extra logins.
 
 A worker retries a failed connection with backoff (1 s, 2 s, ...) and gives up
 after 3 consecutive failures (`AirliftConfig.connectAttempts`). After a failed rsync

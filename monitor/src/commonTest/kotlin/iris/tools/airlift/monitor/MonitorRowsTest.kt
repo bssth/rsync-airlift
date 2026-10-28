@@ -85,7 +85,7 @@ class MonitorRowsTest {
         val frame = renderer.render(MonitorSize(100, 28), snapshot, model)
         assertTrue(frame.runs.any { it.text.startsWith("WARNING attempt 1: ok") && it.foreground == MonitorColor.ANSI.YELLOW })
         assertTrue(frame.runs.any { it.text.startsWith("FAILED attempt 1: bad") && it.foreground == MonitorColor.ANSI.RED })
-        assertContains(frame.text(), "Done 1/2 | Failed 1 | Warnings 1 |")
+        assertContains(frame.text(), "Files 1/2 | Failed 1 | Warnings 1 |")
         assertContains(frame.text(), "FINISHED WITH ERRORS")
         model.selected = 2
         assertTrue(renderer.render(MonitorSize(100, 28), snapshot, model).runs.any {

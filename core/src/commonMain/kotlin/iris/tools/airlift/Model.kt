@@ -21,8 +21,8 @@ data class AirliftConfig(
     val sshOptions: String? = null,
     /** SSH connection attempts per worker, including reconnects after a lost ControlMaster. */
     val connectAttempts: Int = 3,
-    /** Workers that may run SSH authentication at the same time; keeps below sshd's default MaxStartups of 10. */
-    val connectConcurrency: Int = 8,
+    /** Size of each start-up connection wave and the limit for concurrent SSH handshakes, including reconnects. */
+    val connectConcurrency: Int = 5,
 ) {
     init {
         require(host.isNotBlank() && !host.startsWith('-') && host.none { it.isWhitespace() || it.isISOControl() })

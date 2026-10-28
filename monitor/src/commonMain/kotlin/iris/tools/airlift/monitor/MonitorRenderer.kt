@@ -83,7 +83,7 @@ class MonitorRenderer(private val source: MonitorSource, private val title: Stri
         }
         val failedText = if (stats.failedFiles > 0) " | Failed ${stats.failedFiles}" else ""
         val warningText = if (stats.warnings > 0) " | Warnings ${stats.warnings}" else ""
-        line(3, "Workers $workerCount | Done ${stats.completedFiles}/${stats.totalFiles}$failedText$warningText | Elapsed ${duration(elapsed)}")
+        line(3, "Workers $workerCount | Files ${stats.completedFiles}/${stats.totalFiles}$failedText$warningText | Elapsed ${duration(elapsed)}")
         line(4, "Processed ${bytes(processed)} / ${if (allKnown) bytes(total) else "unknown total"} | ${displayRate?.let { bytes(it.toLong()) + "/s" } ?: "--/s"}$etaText")
         val breakdown = OverallBreakdown.from(snapshot, stats)
         val barWidth = (width - 10).coerceAtMost(100)

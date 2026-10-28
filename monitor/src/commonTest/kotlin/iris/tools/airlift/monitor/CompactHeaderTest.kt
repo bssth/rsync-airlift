@@ -20,7 +20,7 @@ class CompactHeaderTest {
             val frame = MonitorRenderer(source).render(MonitorSize(120, 28), snapshot, MonitorModel())
             val text = frame.runs.joinToString("\n") { it.text }
             val header = frame.runs.single { it.text.startsWith("Workers ") }.text
-            assertContains(header, if (failed) "Workers 1 | Done 0/2 | Failed 1 | Elapsed" else "Workers 1 | Done 0/1 | Elapsed")
+            assertContains(header, if (failed) "Workers 1 | Files 0/2 | Failed 1 | Elapsed" else "Workers 1 | Files 0/1 | Elapsed")
             if (!failed) assertFalse("Failed" in header)
             assertContains(text, "1: Workers | 2: Queue | 3: Errors | Tab: switch | WORKERS")
             assertTrue(frame.runs.any { it.text.startsWith("RUNNING | Size 100.0B | Speed --/s | attempt 1") })

@@ -26,7 +26,8 @@ class AirliftDispatcher(
         localDescription else "${config.host}:${config.remoteRoot}"
 
     private val mutex = Mutex()
-    // Simultaneous SSH logins beyond sshd's MaxStartups (10 by default) are dropped at random.
+    // Start-up waves bound the first logins; this also bounds retries and reconnects, for example
+    // when every worker loses its master in the same network outage.
     private val connectPermits = Semaphore(config.connectConcurrency)
     private val supervisor = SupervisorJob()
     private val scope = CoroutineScope(supervisor + dispatcher)
@@ -37,6 +38,10 @@ class AirliftDispatcher(
     private val queue = ArrayDeque(tasks.map { it.id })
     private val workers = linkedMapOf<Int, WorkerState>()
     private val activeTransports = mutableMapOf<Int, TransferSession>()
+    private class ConnectionWave(val previous: Deferred<Unit>, var remaining: Int) {
+        val completed = CompletableDeferred<Unit>()
+    }
+    private var connectionBarrier = CompletableDeferred<Unit>().apply { complete(Unit) }
     private val retiring = mutableSetOf<Int>()
     private val completion = CompletableDeferred<AirliftSnapshot>()
     private var finalSnapshot: AirliftSnapshot? = null
@@ -105,11 +110,18 @@ class AirliftDispatcher(
     @OptIn(DelicateCoroutinesApi::class)
     private fun replenishLocked() {
         while (!cancelled && queue.isNotEmpty() && liveWorkers - retiring.size < targetWorkers) {
-            val id = ++nextWorker
-            liveWorkers++
-            workers[id] = WorkerState(id, WorkerStatus.CONNECTING)
-            // The finally block must run even if close() wins before coroutine dispatch.
-            scope.launch(CoroutineName("airlift-worker-$id"), start = CoroutineStart.ATOMIC) { runWorker(id) }
+            // A full wave must finish its connection attempts before the next one
+            // starts. A semaphore alone would refill slots after each fast connect.
+            val count = minOf(config.connectConcurrency, targetWorkers - (liveWorkers - retiring.size))
+            val wave = ConnectionWave(connectionBarrier, count)
+            connectionBarrier = wave.completed
+            repeat(count) {
+                val id = ++nextWorker
+                liveWorkers++
+                workers[id] = WorkerState(id, WorkerStatus.CONNECTING)
+                // Cleanup also releases the wave if shutdown wins before dispatch.
+                scope.launch(CoroutineName("airlift-worker-$id"), start = CoroutineStart.ATOMIC) { runWorker(id, wave) }
+            }
         }
     }
 
@@ -141,10 +153,25 @@ class AirliftDispatcher(
     private fun backoffMillis(failures: Int): Long =
         (config.retryDelayMillis * (1L shl (failures - 1).coerceIn(0, 5))).coerceAtMost(30_000)
 
-    private suspend fun runWorker(id: Int) {
+    private suspend fun runWorker(id: Int, wave: ConnectionWave) {
         var transport: TransferSession? = null
         var fatal: String? = null
+        // Only the first connection attempt belongs to the start-up wave; retries and reconnects
+        // wait for the connection semaphore instead, so a backoff never holds up later waves.
+        var pendingWave: ConnectionWave? = wave
+        suspend fun leaveWave() {
+            val current = pendingWave ?: return
+            pendingWave = null
+            // Failures/cancellation must not strand later waves. Notify outside
+            // the state mutex, since completion can resume another worker.
+            withContext(NonCancellable) {
+                val release = mutex.withLock { --current.remaining == 0 }
+                if (release) current.completed.complete(Unit)
+            }
+        }
         try {
+            wave.previous.await()
+            currentCoroutineContext().ensureActive()
             // Consecutive connection failures; a completed job resets the count.
             var failures = 0
             var lastError: String? = null
@@ -170,6 +197,8 @@ class AirliftDispatcher(
                 } catch (e: Exception) {
                     lastError = e.message ?: "SSH connection failed"
                     false
+                } finally {
+                    leaveWave()
                 }
                 val outcome = if (connected) transferLoop(id, session) else null
                 if (outcome == WorkerOutcome.FINISHED) break
@@ -196,6 +225,8 @@ class AirliftDispatcher(
         } catch (e: Exception) {
             fatal = e.message ?: "Worker failed"
         } finally {
+            // Shutdown before the first connection attempt must still release the wave.
+            leaveWave()
             // Cancellation must not skip acquiring the mutex and publishing final state.
             withContext(NonCancellable) {
                 runCatching { transport?.close() }
