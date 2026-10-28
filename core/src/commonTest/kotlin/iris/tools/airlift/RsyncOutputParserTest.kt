@@ -27,7 +27,7 @@ class RsyncOutputParserTest {
         assertNull(parser.parse("AIRLIFT_FILE:unknown.bin"))
     }
 
-    @Test fun `escape decoding keeps literal text, emoji and an escaped backslash`() {
+    @Test fun `escape decoding keeps literal text emoji and an escaped backslash`() {
         assertEquals("a\\#12b", RsyncText.decode("a\\#134#12b"))
         assertEquals("tab\there", RsyncText.decode("tab\\#011here"))
         assertEquals("😀 ok", RsyncText.decode("😀 ok"))

@@ -4,7 +4,7 @@ package iris.tools.airlift
 class RsyncOutputParser(files: Collection<String> = emptyList()) {
     // 1-based positions in the submitted list, for "file N/M" in the monitor.
     private val positions = HashMap<String, Int>(files.size * 2).also { map ->
-        files.forEachIndexed { index, file -> map.putIfAbsent(file, index + 1) }
+        files.forEachIndexed { index, file -> map.getOrPut(file) { index + 1 } }
     }
     private var latest = TransferProgress(0, null, null)
     private var matched: Long? = null
