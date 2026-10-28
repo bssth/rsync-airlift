@@ -27,14 +27,55 @@ class MonitorApplicationTest {
         }
     }
 
-    private fun TestScope.dispatcher() = AirliftDispatcher(
-        AirliftConfig("user@host", "/source", Path("destination"), workers = 1), emptyList(),
-        transports = TransferSessionFactory { error("No work to transfer") },
+    private fun TestScope.dispatcher(tasks: List<TransferTask> = emptyList()) = AirliftDispatcher(
+        AirliftConfig("user@host", "/source", Path("destination"), workers = 1), tasks,
+        transports = TransferSessionFactory {
+            object : TransferSession {
+                override suspend fun connect() {}
+                override suspend fun transfer(task: TransferTask, logFile: Path, progress: suspend (TransferProgress) -> Unit): Int {
+                    delay(10_000)
+                    return 0
+                }
+                override suspend fun close() {}
+            }
+        },
         logs = object : DispatcherLogStore {
             override suspend fun createRunDirectory() = Path("logs")
             override fun attemptPath(run: Path, worker: Int, taskIndex: Int, attempt: Int) = Path(run, "attempt")
         }, dispatcher = StandardTestDispatcher(testScheduler),
     )
+
+    @Test fun `closing owned panel after completion exits service and cleans resources`() = runTest {
+        val dispatcher = dispatcher()
+        val platform = Platform()
+        val job = launch {
+            runMonitorService(dispatcher, DispatcherMonitorSource(dispatcher), Path("endpoint"),
+                false, true, false, platform, runPanel = { dispatcher.awaitCompletion() })
+        }
+        runCurrent()
+        assertTrue(job.isCompleted)
+        assertTrue(platform.closed && platform.removed)
+    }
+
+    @Test fun `detaching owned panel during transfer leaves service running`() = runTest {
+        val dispatcher = dispatcher(listOf(TransferTask("a", 1)))
+        val platform = Platform()
+        val job = launch {
+            runMonitorService(dispatcher, DispatcherMonitorSource(dispatcher), Path("endpoint"),
+                false, true, false, platform, runPanel = {
+                    assertNull(dispatcher.snapshot().finishedAtMillis)
+                })
+        }
+        runCurrent()
+        assertTrue(job.isActive)
+        assertFalse(platform.closed)
+        advanceUntilIdle()
+        assertNotNull(dispatcher.snapshot().finishedAtMillis)
+        assertTrue(job.isActive)
+        platform.shutdown!!()
+        job.join()
+        assertTrue(platform.closed && platform.removed)
+    }
 
     @Test fun `service stays attachable after completion until shutdown`() = runTest {
         val dispatcher = dispatcher()

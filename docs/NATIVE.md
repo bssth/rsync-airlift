@@ -34,7 +34,9 @@ chmod +x rsync-airlift.kexe airlift-monitor-tests.kexe
 ```
 
 Demo transfers are simulated, with one deliberate error to exercise error display.
-`Q` detaches the panel; the service remains available after completion. Reattach:
+`Q` during transfer detaches the panel; the service remains available. In an
+ordinary interactive run, Q after completion exits the program. A `--serve`
+service stays alive, and `--attach` never shuts down the dispatcher. Reattach:
 
 ```bash
 ./rsync-airlift.kexe --attach ./airlift-native.connection

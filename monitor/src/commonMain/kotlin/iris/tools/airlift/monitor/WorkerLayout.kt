@@ -15,12 +15,14 @@ data class WorkerLineLayout(val width: Int) {
         val fraction = percent.trim().removeSuffix("%").toIntOrNull()?.coerceIn(0, 100) ?: 0
         val fill = fraction * barWidth / 100
         val failed = worker.status == WorkerStatus.FAILED || task?.status == TaskStatus.FAILED
-        val preparing = task?.status == TaskStatus.RUNNING && worker.status == WorkerStatus.TRANSFERRING &&
+        val finishing = MonitorModel.finishing(task) && worker.status == WorkerStatus.TRANSFERRING
+        val preparing = !finishing && task?.status == TaskStatus.RUNNING && worker.status == WorkerStatus.TRANSFERRING &&
             (task.progress?.logicalBytes ?: 0) == 0L && (task.progress?.bytesPerSecond ?: 0.0) <= 0.0
         val label = when {
             failed -> "FAILED"
             worker.status == WorkerStatus.CONNECTING -> "CONNECTING"
             worker.status == WorkerStatus.STOPPED -> "STOPPED"
+            finishing -> " finishing"
             preparing -> {
                 if (barWidth >= " computing checksums".length) " computing checksums" else " checksums"
             }
@@ -31,11 +33,15 @@ data class WorkerLineLayout(val width: Int) {
             else "|".repeat(fill) + " ".repeat(barWidth - fill)
         val eta = when (task?.status) {
             TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED -> ""
-            TaskStatus.RUNNING -> if (preparing) "" else MonitorModel.compactDuration(task.progress?.remainingSeconds)
+            TaskStatus.RUNNING -> if (preparing || finishing) "" else MonitorModel.compactDuration(task.progress?.remainingSeconds)
             else -> "--"
         }
         val statsProgress = task?.progress
-        val barSegments = if (label.isEmpty() && task?.status == TaskStatus.SUCCEEDED && statsProgress?.matchedBytes != null && statsProgress.literalBytes != null) {
+        val barSegments = if (finishing && !failed) {
+            val caption = label.take(barWidth)
+            listOf(RowSegment(caption, MonitorColor.ANSI.WHITE),
+                RowSegment("|".repeat(barWidth - caption.length), MonitorColor.ANSI.GREEN))
+        } else if (label.isEmpty() && task?.status == TaskStatus.SUCCEEDED && statsProgress?.matchedBytes != null && statsProgress.literalBytes != null) {
             val literal = statsProgress.literalBytes!!.coerceAtLeast(0)
             val rawMatched = statsProgress.matchedBytes!!.coerceAtLeast(0)
             val total = task.task.size ?: (rawMatched + literal)

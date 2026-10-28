@@ -27,7 +27,8 @@ object SshAuthentication {
         lock.locked { commandLocked(arguments, environment) }
 
     private fun commandLocked(arguments: List<String>, environment: Map<String, String>): List<String> =
-        if (environment.containsKey("SSHPASS") || promptedPassword != null) listOf("sshpass", "-e") + arguments.map {
+        if (arguments.firstOrNull() == "sshpass") arguments
+        else if (environment.containsKey("SSHPASS") || promptedPassword != null) listOf("sshpass", "-e") + arguments.map {
             if (it == "BatchMode=yes") "BatchMode=no" else it
         } else arguments
 

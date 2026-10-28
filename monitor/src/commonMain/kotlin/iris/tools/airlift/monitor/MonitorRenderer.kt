@@ -45,7 +45,7 @@ class MonitorRenderer(private val source: MonitorSource, private val title: Stri
         if (width < 64 || height < 16) {
             line(0, title, MonitorColor.ANSI.CYAN)
             line(2, "Resize terminal to at least 64 x 16.")
-            line(height - 1, "Q Detach (transfers continue)")
+            line(height - 1, if (snapshot.finishedAtMillis == null) "Q Detach (transfers continue)" else "Q Exit")
             return screen
         }
         val state = when {
@@ -137,8 +137,9 @@ class MonitorRenderer(private val source: MonitorSource, private val title: Stri
                     else "file ${index ?: "--"}/${task.task.fileCount}"
                 " | Files ${task.task.fileCount} | $position | sent ${task.progress?.transferredFiles ?: 0}"
             } else ""
-            val statusInfo = if (batchInfo.isNotEmpty()) "${task?.status}$batchInfo | Size ${bytes(task?.task?.size)}"
-                else "${task?.status ?: worker?.status ?: "--"} | Size ${bytes(task?.task?.size)} | attempt ${task?.attempts ?: 0}"
+            val displayedStatus = if (MonitorModel.finishing(task)) "FINISHING" else task?.status ?: worker?.status ?: "--"
+            val statusInfo = if (batchInfo.isNotEmpty()) "$displayedStatus$batchInfo | Size ${bytes(task?.task?.size)}"
+                else "$displayedStatus | Size ${bytes(task?.task?.size)} | attempt ${task?.attempts ?: 0}"
             line(y + 2, statusInfo)
             line(y + 3, "$stats | Speed ${task?.let { MonitorModel.rate(it) } ?: "--/s"}")
             val error = task?.error ?: row?.error
@@ -147,7 +148,7 @@ class MonitorRenderer(private val source: MonitorSource, private val title: Stri
         segments(0, height - 2, if (model.message.isNotEmpty()) listOf(RowSegment(model.message, MonitorColor.ANSI.YELLOW)) else listOf(
             RowSegment("Overall: "), RowSegment("matched ", MonitorColor.ANSI.CYAN), RowSegment("new ", MonitorColor.ANSI.GREEN),
             RowSegment("failed ", MonitorColor.ANSI.RED), RowSegment("pending stats/progress", MonitorColor.ANSI.YELLOW)), width)
-        line(height - 1, "Arrows Select | F2 Details | P Pause | +/- Workers | Q Detach", MonitorColor.ANSI.CYAN)
+        line(height - 1, "Arrows Select | F2 Details | P Pause | +/- Workers | Q ${if (snapshot.finishedAtMillis == null) "Detach" else "Exit"}", MonitorColor.ANSI.CYAN)
         return screen
     }
 }

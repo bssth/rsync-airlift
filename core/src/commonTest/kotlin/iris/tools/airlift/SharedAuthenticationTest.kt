@@ -4,6 +4,29 @@ import iris.tools.airlift.process.ProcessSpec
 import kotlin.test.*
 
 class SharedAuthenticationTest {
+    @Test fun `preflight wrapping followed by process configuration adds sshpass only once`() {
+        SshAuthentication.clearPassword()
+        val environment = mapOf("SSHPASS" to "test secret")
+        val wrapped = SshAuthentication.command(listOf("ssh", "-o", "BatchMode=yes", "user@host"), environment)
+        val configured = SshAuthentication.configure(ProcessSpec(wrapped, environment = environment, inheritEnvironment = false))
+        assertEquals(wrapped, configured.command)
+        assertEquals(1, configured.command.count { it == "sshpass" })
+        assertEquals("test secret", configured.environment["SSHPASS"])
+        assertEquals(configured, SshAuthentication.configure(configured))
+    }
+
+    @Test fun `prompted password configuration is idempotent and keeps replacement environment`() {
+        try {
+            SshAuthentication.usePassword("replacement".toCharArray())
+            val wrapped = SshAuthentication.command(listOf("ssh", "-o", "BatchMode=yes"), emptyMap())
+            val configured = SshAuthentication.configure(ProcessSpec(wrapped, inheritEnvironment = false))
+            assertEquals(listOf("sshpass", "-e", "ssh"), configured.command.take(3))
+            assertEquals(1, configured.command.count { it == "sshpass" })
+            assertEquals("replacement", configured.environment["SSHPASS"])
+            assertEquals(configured, SshAuthentication.configure(configured))
+        } finally { SshAuthentication.clearPassword() }
+    }
+
     @Test fun `password input is copied and clearing removes the shared credential`() {
         val password = "new password".toCharArray()
         try {

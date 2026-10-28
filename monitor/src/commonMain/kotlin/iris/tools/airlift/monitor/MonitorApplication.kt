@@ -31,7 +31,8 @@ internal suspend fun launchMonitor(args: List<String>, platform: MonitorApplicat
             Default UI: real terminal. --swing explicitly opens a graphical terminal window.
             Prefer the installed launcher for TUI; SSH requires a PTY (ssh -t).
             P pause new tasks; +/- workers; 1/2/3 views; arrows select; F2 details; Q detach.
-            Server stays alive after detaching and completion. Ctrl+C stops the server/transfers.
+            After completion, Q exits an interactive run. --serve stays alive; --attach only detaches.
+            Detaching during a transfer keeps the server alive. Ctrl+C stops the server/transfers.
             For SSH disconnect survival, run the server in tmux or as a service.
         """.trimIndent())
         return
@@ -89,6 +90,7 @@ internal suspend fun runMonitorService(
     dispatcher: AirliftDispatcher, source: MonitorSource, endpoint: Path,
     demo: Boolean, interactive: Boolean, swing: Boolean,
     platform: MonitorApplicationPlatform,
+    runPanel: suspend () -> Unit = { AirliftMonitor(source, swing = swing).run() },
 ) {
     var server: MonitorService? = null
     var shutdown: ShutdownRegistration? = null
@@ -104,9 +106,10 @@ internal suspend fun runMonitorService(
         dispatcher.start()
         println("${if (demo) "DEMO (simulated data). " else ""}Monitor connection: $endpoint")
         println("Attach: rsync-airlift-monitor --attach \"$endpoint\"")
-        println("Ctrl+C stops dispatcher. Q only detaches the panel.")
+        println("Ctrl+C stops dispatcher. Q detaches while running; after completion Q exits an interactive run.")
         if (interactive) {
-            AirliftMonitor(source, swing = swing).run()
+            runPanel()
+            if (dispatcher.snapshot().finishedAtMillis != null) return
             println("Monitor detached. Dispatcher remains available at $endpoint")
         }
         stop.await()

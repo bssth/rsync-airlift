@@ -141,6 +141,10 @@ class MonitorModel {
         }
         fun duration(seconds: Long?): String = if (seconds == null) "--:--:--" else
             listOf(seconds / 3600, seconds / 60 % 60, seconds % 60).joinToString(":") { it.toString().padStart(2, '0') }
+        /** Data reached the displayed total, but the transport has not reported its exit yet. */
+        fun finishing(task: TaskState?): Boolean =
+            task?.status == TaskStatus.RUNNING && percent(task).trim() == "100%"
+
         fun percent(task: TaskState): String {
             val size = task.task.size
             val progress = task.progress

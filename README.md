@@ -464,7 +464,7 @@ wide, and page when necessary. The overall bar has at most **100** interior cell
 | `-` | First dismiss one FAILED worker row; otherwise decrease concurrency, minimum one |
 | Click worker/list row or tab | Select an entry or switch view |
 | Mouse wheel over the list | Move selection by three entries |
-| `Q` | Detach the panel; transfers and monitor service continue |
+| `Q` | Detach while running; after completion, exit an owned interactive run. An attached panel only detaches |
 
 Dismissed FAILED rows are hidden in that panel session; their errors remain in
 Errors. They can reappear after reattaching. STOPPED workers are hidden. A subdued
@@ -479,6 +479,11 @@ zoom and padding belong to the terminal application. In Swing only, use
 Consolas and falls back to installed monospace fonts.
 
 ### Progress and details
+
+A worker at 100% can still be waiting for rsync to finish. Its bar shows a quiet
+`finishing` label and DETAILS shows `FINISHING`; ETA is blank. The task remains
+running until the process exits, then becomes successful or displays its error.
+This label indicates waiting for completion, not a detected internal rsync phase.
 
 Worker size, rate and percentage refer to the whole job. While a running job has
 zero reported bytes and no positive rate, a quiet `computing checksums` or
@@ -539,6 +544,9 @@ java -jar rsync-airlift.jar --attach "$HOME/airlift.connection"
 For an interactive launch that should survive SSH logout, use tmux or a service.
 `Q` alone does not protect the hosting process from logout. The server remains
 alive after transfer completion so results can be inspected; **Ctrl+C stops it**.
+For an ordinary interactive run, Q after completion closes both the panel and its
+service. Q during transfer only detaches; a separately attached panel never stops
+the dispatcher.
 The CLI is not currently a one-shot command that exits at the end of copying.
 
 The monitor service binds to **127.0.0.1** on an ephemeral port. Its connection
