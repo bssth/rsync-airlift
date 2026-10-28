@@ -29,6 +29,11 @@ class RsyncArgumentsTest {
         }
     }
 
+    @Test fun `human-readable output is switched off after user options`() {
+        val command = RsyncCommand.build(AirliftConfig("user@host", "/source", Path("dest"), rsyncOptions = "-avh"), "ssh", "s", "d")
+        assertTrue(command.indexOf("--no-human-readable") > command.indexOf("-avh"))
+    }
+
     @Test fun `transport inside short option clusters and stdin consumers are reserved`() {
         for (text in listOf("-ave ssh", "-avessh", "--exclude-from=-", "--include-from -", "--filter='merge -'",
             "--filter=. -", "-f'. -'", "-avf 'dir-merge -'", "-av extra-source")) {
@@ -61,7 +66,7 @@ class RsyncArgumentsTest {
     @Test fun `no copy policy is injected when options are omitted or empty`() {
         for (options in listOf(null, "")) {
             val command = RsyncCommand.build(AirliftConfig("user@host", "/source", Path("dest"), rsyncOptions = options), "ssh", "source", "dest")
-            assertEquals(listOf("rsync", "--relative", "--protect-args", "--from0", "--files-from=-", "--info=progress2", "--outbuf=L", "--stats", "--info=name1", "--out-format=AIRLIFT_FILE:%n", "-e", "ssh", "--", "source", "dest"), command)
+            assertEquals(listOf("rsync", "--relative", "--protect-args", "--from0", "--files-from=-", "--info=progress2", "--outbuf=L", "--stats", "--no-human-readable", "--info=name1", "--out-format=AIRLIFT_FILE:%n", "-e", "ssh", "--", "source", "dest"), command)
         }
     }
 }
