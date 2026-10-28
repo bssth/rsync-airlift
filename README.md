@@ -623,7 +623,9 @@ java -jar rsync-airlift.jar --attach "$HOME/airlift.connection"
 ```
 
 For an interactive launch that should survive SSH logout, use tmux or a service.
-`Q` alone does not protect the hosting process from logout. The server remains
+Without tmux, logout (SIGHUP) stops the dispatcher cleanly, like Ctrl+C or SIGTERM:
+transfers are cancelled and the connection file is removed. A `nohup` launch keeps
+ignoring SIGHUP. `Q` alone does not protect the hosting process from logout. The server remains
 alive after transfer completion so results can be inspected; **Ctrl+C stops it**.
 For an ordinary interactive run, Q after completion closes both the panel and its
 service. Q during transfer only detaches; a separately attached panel never stops
@@ -907,7 +909,9 @@ Building requires a JDK; running the resulting executable does not.
 Linux core process and system adapters are implemented and its Native test executable
 can be linked. Linux monitor socket, console, inventory and application adapters are
 implemented. A Native ANSI terminal backend supports demo, attach and interactive
-transfers and has been verified on Linux with real SSH/rsync transfers. See [Linux Native](docs/NATIVE.md)
+transfers and has been verified on Linux with real SSH/rsync transfers. If the terminal
+stops reading or disconnects, only the panel closes; transfers continue as a detached
+service that `--attach` can reopen. See [Linux Native](docs/NATIVE.md)
 for build, packaging and usage instructions. Default JVM builds remain available.
 Compilation and linking work on Windows too; the resulting ELF runs on Linux x86-64.
 
