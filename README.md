@@ -247,7 +247,8 @@ Other build targets:
 
 Builds, tests and the terminal/demo UI work on Windows. Real transfers target
 **Linux or WSL with a Linux JDK**, with OpenSSH and rsync on both machines.
-Remote discovery also requires a POSIX shell and GNU `find`.
+Remote discovery also requires a POSIX `sh` and GNU `find` on the source host; the login
+shell may be bash, zsh, fish or tcsh.
 Password authentication requires `sshpass` on the machine running Airlift.
 
 ## Quick start
@@ -288,7 +289,7 @@ modes do not ask for transfer confirmation.
 | `--ssh "OPTIONS"` | Extra OpenSSH client options, such as a cipher; see [Rsync options](#rsync-options) |
 | `--attempts N` | rsync attempts per job, 1–10; 1 |
 | `--batch-min-size SIZE` | Minimum accumulated job size; `5MiB` |
-| `--files FILE` | UTF-8 relative file list; one path per line |
+| `--files FILE` | UTF-8 relative file list; one path per line (a BOM and leading `./` are accepted) |
 | `--null` | Read the list as NUL-separated paths instead |
 | `--port N` | SSH port; 22 |
 | `--identity FILE` | SSH private-key path |
@@ -359,8 +360,23 @@ java -jar rsync-airlift.jar --rsync "-av --partial" \
   /srv/source/*.bin user@host:/srv/destination/
 ```
 
-`*` and `?` match within one path component, `**` crosses directories, and bracket
-classes such as `[abc]` are supported. Quote masks when Airlift should expand them.
+`*` and `?` match within one path component, including names that start with a dot;
+`**` crosses directories; `[abc]`, `[a-z]` and `[!abc]` match one character. A backslash
+escapes the next character (`\*`, `\?`, `\[`, `\\`). A mask ending in `/` selects every
+file below the matching directories, for example `'user@host:/srv/*/data/'`. Quote masks
+when Airlift should expand them.
+
+A path that exists is always used literally, so names containing `[`, `?` or `*`, such as
+`Photos [2020]/`, need no escaping. A mask or source that selects no files stops
+preparation with an error; a mask that also matches directories prints a warning,
+because masks select files.
+
+A source that is a symlink to a directory is followed only when written with a trailing
+slash (`link/`), as in rsync; without it the link itself is copied.
+
+Names that are not valid UTF-8 cannot be passed in rsync's file list: discovery skips
+them with a warning that lists the escaped paths (`\xFF`), and their directories are never
+collapsed. Entries that disappear during discovery are ignored.
 
 With `--files` and no mask, only the listed paths are selected. With a mask and
 `--files`, the two selections are combined without duplicates. List paths are
@@ -375,6 +391,7 @@ Destination mapping:
 | Single file `/data/one/a.bin` | `/backup/a.bin` |
 | Multiple directories `/data/one` and `/data/two` | `/backup/one/...` and `/backup/two/...` |
 | Multiple directories `/data/one/` and `/data/two/` | Their contents directly under `/backup/` |
+| Multiple sources including `.`, `..` or `/data/one/.` | Contents directly under `/backup/`, as with a trailing slash |
 
 A single directory is treated as a root and copies its contents, with or without
 a trailing slash. The directory-name distinction in the table applies to multiple
@@ -385,7 +402,8 @@ sources mapping to the same destination path cause a preparation error.
 ## Scheduling, batching and directory collapse
 
 The launcher starts with descending file sizes (ties by path). When it reaches
-files smaller than `--batch-min-size`, it sorts the remaining tail by path.
+files smaller than `--batch-min-size`, it sorts the remaining tail by source root, then
+path, so files from the same source share batches.
 It fills jobs until their accumulated size reaches the threshold or more, the
 queue ends, or the source root changes. A large file naturally fills a job on its
 own in the descending-size prefix. The final job may be smaller; there is no
@@ -410,9 +428,12 @@ Unselected empty directories and special filesystem entries also block parent
 collapse. Airlift performs no per-job directory rescan or additional SSH check;
 rsync handles the subsequent traversal. Collapsed jobs add `--recursive`.
 
-Collapse is disabled for `--delete*`, `--remove-source-files`, `--copy-links`,
-`--copy-dirlinks`, `--keep-dirlinks`, their recognized short link-following flags,
-and `--no-recursive`. Original file names and sizes remain in the job ledger.
+Collapse is disabled for `--delete*`, `--del`, `--remove-source-files`/`--remove-sent-files`,
+`--copy-links`, `--copy-dirlinks`, `--copy-unsafe-links`, `--keep-dirlinks`, the short
+link-following flags `-L`, `-k`, `-K`, `--no-recursive`, and filter or file-system options
+(`--exclude*`, `--include*`, `--filter`/`-f`, `-F`, `-C`/`--cvs-exclude`,
+`-x`/`--one-file-system`), because recursion could then copy, delete or skip files other
+than the listed ones. Original file names and sizes remain in the job ledger.
 New files found by rsync in a collapsed directory can be copied; files removed
 since startup may no longer be copied. Displayed counts/totals describe the
 initial selection. Keep directory membership stable when that exact selection
@@ -631,7 +652,8 @@ successful refresh.
 MC shell-link paths are recognized automatically:
 `/sh://user@host/home/data` becomes `user@host:/home/data`.
 `--mc` is accepted but not required. Use `--port` for a nonstandard SSH port rather
-than embedding it in the MC shell-link host.
+than embedding it in the MC shell-link host. Directory names containing `[`, `?` or `*`
+are used literally.
 
 Add to `~/.config/mc/menu`, adjusting the absolute JAR path:
 
