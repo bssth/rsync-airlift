@@ -480,6 +480,11 @@ Consolas and falls back to installed monospace fonts.
 
 ### Progress and details
 
+The overall bar reserves the full size of active jobs: green shows processed data
+awaiting final statistics, and orange shows their remaining work. Queued work is
+blank. Confirmed matched data stays cyan; confirmed new data is green and failed
+jobs are red. The Matched/New counters include only confirmed statistics.
+
 A worker at 100% can still be waiting for rsync to finish. Its bar shows a quiet
 `finishing` label and DETAILS shows `FINISHING`; ETA is blank. The task remains
 running until the process exits, then becomes successful or displays its error.
@@ -510,8 +515,10 @@ Overall statistics:
   full dataset. Their sum may be below 100% while final statistics are pending.
 - The overall bar counts successful and finally failed jobs at full weight, so
   completed work with errors can still reach 100%. Colors: cyan matched, green
-  new, red failed, yellow processed work awaiting a final breakdown. Without
-  usable byte totals, progress falls back to job weights.
+  new or processed work awaiting a final breakdown, red failed, yellow the
+  remaining work of active jobs. Queued work stays blank. The colored extent
+  therefore includes active reservations and may exceed the processed percentage.
+  Without usable byte totals, progress falls back to job weights.
 - Exact Matched/New statistics arrive at the end of each rsync attempt. Completed
   worker bars split by those statistics; live bars show ordinary logical progress.
 - Live speed uses fresh rates; readings expire after three seconds. The previous

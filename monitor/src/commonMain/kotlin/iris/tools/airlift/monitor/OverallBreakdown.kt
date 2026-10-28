@@ -6,6 +6,7 @@ import iris.tools.airlift.*
 data class OverallBreakdown(
     val matched: Double, val literal: Double, val failed: Double, val other: Double,
     val matchedBytes: Long, val literalBytes: Long,
+    val processing: Double = 0.0,
 ) {
     fun summary(processedBytes: Long): String {
         fun portion(value: Long): String = fixedOne(
@@ -14,7 +15,7 @@ data class OverallBreakdown(
     }
 
     fun segments(width: Int): List<RowSegment> {
-        val fractions = listOf(matched, literal, failed, other)
+        val fractions = listOf(matched, literal + processing, failed, other)
         val colors = listOf(MonitorColor.ANSI.CYAN, MonitorColor.ANSI.GREEN, MonitorColor.ANSI.RED, MonitorColor.ANSI.YELLOW)
         var cumulative = 0.0
         var assigned = 0
@@ -34,11 +35,20 @@ data class OverallBreakdown(
             var matched = 0.0
             var literal = 0.0
             var failed = 0.0
+            var activeRemaining = 0.0
             var matchedBytes = 0L
             var literalBytes = 0L
             for (task in snapshot.tasks) {
                 val weight = (if (byBytes) task.task.size!!.toDouble() else 1.0) / denominator
                 if (task.status == TaskStatus.FAILED) { failed += weight; continue }
+                if (task.status == TaskStatus.RUNNING) {
+                    val size = task.task.size
+                    val fraction = if (size != null && size > 0)
+                        (task.progress?.logicalBytes ?: 0).toDouble() / size
+                    else (task.progress?.percent ?: 0) / 100.0
+                    activeRemaining += weight * (1.0 - fraction.coerceIn(0.0, 1.0))
+                    continue
+                }
                 if (task.status != TaskStatus.SUCCEEDED) continue
                 val rawMatched = task.progress?.matchedBytes
                 val l = task.progress?.literalBytes
@@ -63,8 +73,10 @@ data class OverallBreakdown(
                 literal += weight * l / divisor
             }
             val processed = MonitorModel.overallProgress(snapshot)
-            val other = (processed - matched - literal - failed).coerceAtLeast(0.0)
-            return OverallBreakdown(matched, literal, failed, other, matchedBytes, literalBytes)
+            // Green includes logical progress awaiting final Matched/New statistics.
+            // Orange reserves the still-unprocessed part of all active jobs.
+            val processing = (processed - matched - literal - failed).coerceAtLeast(0.0)
+            return OverallBreakdown(matched, literal, failed, activeRemaining, matchedBytes, literalBytes, processing)
         }
     }
 }

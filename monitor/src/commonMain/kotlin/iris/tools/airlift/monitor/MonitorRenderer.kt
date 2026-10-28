@@ -146,8 +146,8 @@ class MonitorRenderer(private val source: MonitorSource, private val title: Stri
             line(y + 4, error?.let { "Error: $it" } ?: "", MonitorColor.ANSI.RED)
         }
         segments(0, height - 2, if (model.message.isNotEmpty()) listOf(RowSegment(model.message, MonitorColor.ANSI.YELLOW)) else listOf(
-            RowSegment("Overall: "), RowSegment("matched ", MonitorColor.ANSI.CYAN), RowSegment("new ", MonitorColor.ANSI.GREEN),
-            RowSegment("failed ", MonitorColor.ANSI.RED), RowSegment("pending stats/progress", MonitorColor.ANSI.YELLOW)), width)
+            RowSegment("Overall: "), RowSegment("matched ", MonitorColor.ANSI.CYAN), RowSegment("new/processed ", MonitorColor.ANSI.GREEN),
+            RowSegment("failed ", MonitorColor.ANSI.RED), RowSegment("active remaining", MonitorColor.ANSI.YELLOW)), width)
         line(height - 1, "Arrows Select | F2 Details | P Pause | +/- Workers | Q ${if (snapshot.finishedAtMillis == null) "Detach" else "Exit"}", MonitorColor.ANSI.CYAN)
         return screen
     }
