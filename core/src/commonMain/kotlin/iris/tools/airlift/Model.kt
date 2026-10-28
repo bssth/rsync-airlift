@@ -52,6 +52,8 @@ data class TaskState(
     val error: String? = null,
     val logFile: Path? = null,
     val progressUpdatedAtNanos: Long? = null,
+    /** Non-fatal note for a successful job, for example rsync code 24 (source files vanished). */
+    val warning: String? = null,
 )
 
 data class AirliftSnapshot(
