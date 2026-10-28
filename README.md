@@ -501,10 +501,10 @@ wide, and page when necessary. The overall bar has at most **100** interior cell
 | Left/Right | Move between worker columns |
 | F2, Enter | Toggle details; displayed when height is at least 22 |
 | `P` | Pause/resume assignment of new jobs |
-| `+` / `=` | Increase concurrency by one, or cancel one pending retirement |
+| `+` / `=` | Increase concurrency by one (at most 256), or cancel one pending retirement |
 | `-` | First dismiss one FAILED worker row; otherwise decrease concurrency, minimum one |
 | Click worker/list row or tab | Select an entry or switch view |
-| Mouse wheel over the list | Move selection by three entries |
+| Mouse wheel over the list | Move selection by one entry |
 | `Q` | Detach while running; after completion, exit an owned interactive run. An attached panel only detaches |
 
 Dismissed FAILED rows are hidden in that panel session; their errors remain in
@@ -512,6 +512,11 @@ Errors. They can reappear after reattaching. STOPPED workers are hidden. A subdu
 orange background on the last live rows indicates how many retirements are pending;
 the first workers to finish actually retire. During a run, `Workers` shows the live
 count; after completion it shows the last configured target.
+
+Keys and mouse input apply immediately; the panel fetches a new snapshot about every
+200 ms. The selection stays on the same job or worker when the list changes. Command
+errors appear above the shortcut line and clear after the next successful command or
+about 5 seconds.
 
 Mouse reporting can prevent ordinary text selection. In terminals supporting it,
 hold Shift while selecting to bypass application mouse capture. Fonts, palette,
@@ -525,6 +530,12 @@ The overall bar reserves the full size of active jobs: green shows processed dat
 awaiting final statistics, and orange shows their remaining work. Queued work is
 blank. Confirmed matched data stays cyan; confirmed new data is green and failed
 jobs are red. The Matched/New counters include only confirmed statistics.
+
+Errors (`3`) lists failed jobs, then SSH worker problems, then warnings of successful
+jobs (for example rsync code 24, source files vanished) in yellow. Warnings are never
+counted as failures: the summary adds `Warnings N`, DETAILS shows `Warning:`, and a run
+with warnings but no failures ends as FINISHED WITH WARNINGS. A reconnecting worker's
+message is shown as a warning.
 
 A worker at 100% can still be waiting for rsync to finish. Its bar shows a quiet
 `finishing` label and DETAILS shows `FINISHING`; ETA is blank. The task remains
@@ -599,15 +610,21 @@ the dispatcher.
 The CLI is not currently a one-shot command that exits at the end of copying.
 
 The monitor service binds to **127.0.0.1** on an ephemeral port. Its connection
-file contains the port, token and endpoint descriptions, with owner-only permissions
-on POSIX. Treat it as a credential and keep it out of Git. To attach remotely,
+file contains the port, a 256-bit token and endpoint descriptions. It is created
+exclusively, without following links, and is readable only by its owner: mode 0600
+on POSIX, and an ACL for the current user on Windows (best effort; file systems
+without ACLs keep default permissions). Treat it as a credential and keep it out of Git. To attach remotely,
 run the attach command through SSH on the dispatcher host, with a PTY.
 
 Connection files are never overwritten. If one exists, attach to that dispatcher
 or choose a different `--endpoint`. After an unclean termination, remove a stale
 file only after confirming that its dispatcher is no longer running. Normal
-shutdown removes the connection file. The protocol is version **3**; update
+shutdown removes the connection file. The protocol is version **4**; update
 dispatcher and attached monitors together when the protocol changes.
+
+If the dispatcher becomes unreachable, an attached panel keeps the last data, shows
+`Connection lost, retrying...` and exits with the error after 10 seconds without a
+successful refresh.
 
 ## Midnight Commander
 
@@ -786,12 +803,15 @@ Service lifetime uses coroutine completion/cancellation; the JVM entry point onl
 bridges main/runBlocking, stderr and process exit. JVM adapters provide the
 socket service/client, shutdown-hook registration and temporary directories.
 
-The monitor client/server and protocol-3 codec live in common code. The server
-uses two coroutine handlers and a bounded queue of 16 waiting connections.
+The monitor client/server and protocol-4 codec live in common code. The server
+serves each connection in its own coroutine, at most 8 at a time, and closes further
+connections immediately. A request (version, token, command) must arrive within
+5 seconds and the response must complete within 30 seconds.
 JVM adapters provide loopback sockets with connect/read timeouts and cancellation
 cleanup; token generation and protected connection-file persistence are separate
-platform functions. Protocol-3 data-stream framing and the properties file format
-remain compatible with existing JVM clients.
+platform functions. Protocol 4 keeps the data-stream framing and properties file
+format but sends each batch's file count instead of its file list; protocol-3
+monitors receive a clear "Monitor protocol changed" message.
 
 Monitor source sets:
 
