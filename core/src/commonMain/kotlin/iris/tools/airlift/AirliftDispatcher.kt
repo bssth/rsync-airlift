@@ -33,6 +33,10 @@ class AirliftDispatcher(
     private val queue = ArrayDeque(tasks.map { it.id })
     private val workers = linkedMapOf<Int, WorkerState>()
     private val activeTransports = mutableMapOf<Int, TransferSession>()
+    private class ConnectionWave(val previous: Deferred<Unit>, var remaining: Int) {
+        val completed = CompletableDeferred<Unit>()
+    }
+    private var connectionBarrier = CompletableDeferred<Unit>().apply { complete(Unit) }
     private val retiring = mutableSetOf<Int>()
     private val completion = CompletableDeferred<AirliftSnapshot>()
     private var finalSnapshot: AirliftSnapshot? = null
@@ -101,11 +105,18 @@ class AirliftDispatcher(
     @OptIn(DelicateCoroutinesApi::class)
     private fun replenishLocked() {
         while (!cancelled && queue.isNotEmpty() && liveWorkers - retiring.size < targetWorkers) {
-            val id = ++nextWorker
-            liveWorkers++
-            workers[id] = WorkerState(id, WorkerStatus.CONNECTING)
-            // The finally block must run even if close() wins before coroutine dispatch.
-            scope.launch(CoroutineName("airlift-worker-$id"), start = CoroutineStart.ATOMIC) { runWorker(id) }
+            // A full wave must finish its connection attempts before the next one
+            // starts. A semaphore alone would refill slots after each fast connect.
+            val count = minOf(5, targetWorkers - (liveWorkers - retiring.size))
+            val wave = ConnectionWave(connectionBarrier, count)
+            connectionBarrier = wave.completed
+            repeat(count) {
+                val id = ++nextWorker
+                liveWorkers++
+                workers[id] = WorkerState(id, WorkerStatus.CONNECTING)
+                // Cleanup also releases the wave if shutdown wins before dispatch.
+                scope.launch(CoroutineName("airlift-worker-$id"), start = CoroutineStart.ATOMIC) { runWorker(id, wave) }
+            }
         }
     }
 
@@ -132,16 +143,27 @@ class AirliftDispatcher(
         }
     }
 
-    private suspend fun runWorker(id: Int) {
+    private suspend fun runWorker(id: Int, wave: ConnectionWave) {
         var transport: TransferSession? = null
         var fatal: String? = null
         try {
-            transport = transports.create(id)
-            mutex.withLock {
-                if (cancelled) return
-                activeTransports[id] = transport
+            try {
+                wave.previous.await()
+                currentCoroutineContext().ensureActive()
+                transport = transports.create(id)
+                mutex.withLock {
+                    if (cancelled) return
+                    activeTransports[id] = transport
+                }
+                transport.connect()
+            } finally {
+                // Failures/cancellation must not strand later waves. Notify outside
+                // the state mutex, since completion can resume another worker.
+                withContext(NonCancellable) {
+                    val release = mutex.withLock { --wave.remaining == 0 }
+                    if (release) wave.completed.complete(Unit)
+                }
             }
-            transport.connect()
             while (true) {
                 val task = takeTask(id) ?: break
                 val taskStartedAt = clock.monotonicNanos()

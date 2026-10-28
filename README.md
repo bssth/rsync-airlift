@@ -305,6 +305,11 @@ includes one failure, and gives each run a temporary endpoint by default.
 
 ## SSH authentication
 
+Worker connections open in waves of at most five. Every connection attempt in a
+wave must finish before the next wave starts; connected workers can already
+transfer files. Workers added during a run use the same ordering. This limits
+simultaneous SSH handshakes but does not guarantee acceptance by every server.
+
 Authentication is prepared once before opening the monitor:
 
 1. If `SSHPASS` exists in the environment, use `sshpass -e` with `BatchMode=no`.

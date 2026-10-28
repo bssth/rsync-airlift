@@ -57,6 +57,66 @@ class AirliftDispatcherTest {
         } finally { dispatcher.close() }
     }
 
+    @Test fun `connections start in waves of five and wait for the slowest attempt`() = runTest {
+        val gates = (1..16).associateWith { CompletableDeferred<Unit>() }
+        val started = mutableListOf<Int>()
+        val dispatcher = engine((1..17).map { TransferTask("file-$it") }, settings(workers = 16),
+            factory = TransferSessionFactory { id ->
+                object : TransferSession {
+                    override suspend fun connect() { started.add(id); gates.getValue(id).await() }
+                    override suspend fun transfer(task: TransferTask, logFile: Path, progress: suspend (TransferProgress) -> Unit) = 0
+                    override suspend fun close() {}
+                }
+            })
+        try {
+            dispatcher.pause()
+            dispatcher.start()
+            runCurrent()
+            assertEquals((1..5).toList(), started)
+            (1..4).forEach { gates.getValue(it).complete(Unit) }
+            runCurrent()
+            assertEquals(5, started.size)
+            gates.getValue(5).complete(Unit)
+            runCurrent()
+            assertEquals((1..10).toList(), started)
+            (6..10).forEach { gates.getValue(it).complete(Unit) }
+            runCurrent()
+            assertEquals((1..15).toList(), started)
+            (11..15).forEach { gates.getValue(it).complete(Unit) }
+            runCurrent()
+            assertEquals((1..16).toList(), started)
+        } finally { dispatcher.close() }
+        assertTrue(dispatcher.awaitCompletion().cancelled)
+    }
+
+    @Test fun `new workers wait for current wave including failed connection attempts`() = runTest {
+        val gates = (1..8).associateWith { CompletableDeferred<Unit>() }
+        val started = mutableListOf<Int>()
+        val dispatcher = engine((1..10).map { TransferTask("file-$it") }, settings(workers = 5),
+            factory = TransferSessionFactory { id ->
+                object : TransferSession {
+                    override suspend fun connect() { started.add(id); gates.getValue(id).await() }
+                    override suspend fun transfer(task: TransferTask, logFile: Path, progress: suspend (TransferProgress) -> Unit) = 0
+                    override suspend fun close() {}
+                }
+            })
+        try {
+            dispatcher.pause()
+            dispatcher.start()
+            runCurrent()
+            dispatcher.setWorkerCount(8)
+            gates.getValue(3).completeExceptionally(IllegalStateException("Connection refused"))
+            listOf(1, 2, 4).forEach { gates.getValue(it).complete(Unit) }
+            runCurrent()
+            assertEquals((1..5).toList(), started)
+            assertEquals(WorkerStatus.FAILED, dispatcher.snapshot().workers.single { it.id == 3 }.status)
+            gates.getValue(5).complete(Unit)
+            runCurrent()
+            assertEquals((1..8).toList(), started)
+        } finally { dispatcher.close() }
+        assertTrue(dispatcher.awaitCompletion().cancelled)
+    }
+
     @Test fun `source and destination descriptions belong to the shared dispatcher`() = runTest {
         for (direction in TransferDirection.entries) {
             val config = settings().copy(direction = direction)
@@ -116,10 +176,12 @@ class AirliftDispatcherTest {
         } finally { dispatcher.close() }
     }
 
-    @Test fun `immediate close finalizes coroutines cancelled before first dispatch`() = runTest {
+    @Test fun `immediate close finalizes coroutines without creating unused sessions`() = runTest {
+        var created = 0
         var connected = 0
         var closed = 0
         val transports = TransferSessionFactory {
+            created++
             object : TransferSession {
                 override suspend fun connect() { connected++ }
                 override suspend fun transfer(task: TransferTask, logFile: Path, progress: suspend (TransferProgress) -> Unit): Int = error("Unexpected transfer")
@@ -131,7 +193,8 @@ class AirliftDispatcherTest {
         dispatcher.close()
         val final = dispatcher.awaitCompletion()
         assertEquals(0, connected)
-        assertEquals(8, closed)
+        assertEquals(0, created)
+        assertEquals(created, closed)
         assertTrue(final.cancelled)
         assertTrue(final.tasks.all { it.status == TaskStatus.CANCELLED })
         assertTrue(final.workers.all { it.status == WorkerStatus.STOPPED })
