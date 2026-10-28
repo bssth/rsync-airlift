@@ -35,7 +35,7 @@ class MouseMonitorTest {
                     }
                 }
                 val selected = model.selected
-                model.handleMouse(click(1, 9), snapshot) // Header is not a worker.
+                model.handleMouse(click(1, 8), snapshot) // Header is not a worker.
                 model.handleMouse(click(1, 23), snapshot) // Footer is not a worker.
                 assertEquals(selected, model.selected)
             }
@@ -48,19 +48,19 @@ class MouseMonitorTest {
             val model = MonitorModel()
             val monitor = AirliftMonitor(source)
             monitor.render(screen, snapshot, model)
-            model.handleMouse(click(14, 8, 3), snapshot)
+            model.handleMouse(click(14, 7, 3), snapshot)
             assertEquals(MonitorView.WORKERS, model.view)
-            model.handleMouse(click(14, 8), snapshot)
+            model.handleMouse(click(14, 7), snapshot)
             assertEquals(MonitorView.QUEUE, model.view)
             model.selected = 20
             monitor.render(screen, snapshot, model)
             val first = model.mouseRows.first()
             model.handleMouse(click(1, first.y), snapshot)
             assertEquals(first.index, model.selected)
-            model.handleMouse(click(24, 8), snapshot)
+            model.handleMouse(click(24, 7), snapshot)
             assertEquals(MonitorView.ERRORS, model.view)
             assertEquals(0, model.selected)
-            model.handleMouse(click(2, 8), snapshot)
+            model.handleMouse(click(2, 7), snapshot)
             assertEquals(MonitorView.WORKERS, model.view)
         }
     }

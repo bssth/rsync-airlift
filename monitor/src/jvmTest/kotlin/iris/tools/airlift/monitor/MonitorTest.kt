@@ -63,7 +63,7 @@ class MonitorTest {
             assertContains(text(), "[|||||")
             assertContains(text(), "40%")
             assertContains(text(), "Done 0/3 | Failed 1")
-            assertContains(text(), "Workers 1 | Elapsed")
+            assertContains(text(), "Workers 1 | Done 0/3 | Failed 1 | Elapsed")
             assertFalse(text().contains("Workers target"))
             assertFalse(text().contains("| Queue "))
             assertFalse(text().contains("| Running "))

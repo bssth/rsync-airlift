@@ -495,8 +495,9 @@ zero reported bytes and no positive rate, a quiet `computing checksums` or
 `checksums` label replaces the empty bar. This is a preparation indicator, not
 confirmation of rsync's precise internal phase.
 
-Details show the filename reported by rsync, job size and state, matched/new data,
-speed and errors. Multi-file jobs also show the file count, current file's index
+Details show the filename reported by rsync, job size and state, speed, attempt
+and errors. Status, size, speed and attempt share a single compact line;
+Matched/New statistics remain in the overall summary rather than DETAILS. Multi-file jobs also show the file count, current file's index
 in the submitted list, and rsync's `sent` counter. The index is **not** a processed
 count: rsync can reorder and skip files. `sent` counts transferred files, excluding
 quick-check skips. Successful batches display `Processed N/N` instead of the last

@@ -15,24 +15,24 @@ class MonitorModel {
     }
     internal data class MouseRow(val x: Int, val y: Int, val width: Int, val index: Int)
     internal val mouseRows = mutableListOf<MouseRow>()
-    internal var bodyBottom = 10
+    internal var bodyBottom = 9
 
     internal fun handleMouse(action: MonitorEvent.Mouse, snapshot: AirliftSnapshot) {
         val x = action.x
         val y = action.y
         when (action.actionType) {
             MonitorMouseAction.CLICK_DOWN -> if (action.button == 1) {
-                if (y == 8) {
+                if (y == 7) {
                     val tab = when (x) {
-                        in 0 until 9 -> MonitorView.WORKERS
-                        in 12 until 19 -> MonitorView.QUEUE
-                        in 22 until 30 -> MonitorView.ERRORS
+                        in 0 until 10 -> MonitorView.WORKERS
+                        in 13 until 21 -> MonitorView.QUEUE
+                        in 24 until 33 -> MonitorView.ERRORS
                         else -> null
                     }
                     if (tab != null) { view = tab; selected = 0; mouseRows.clear() }
                 } else mouseRows.firstOrNull { y == it.y && x >= it.x && x < it.x + it.width }?.let { selected = it.index }
             }
-            MonitorMouseAction.SCROLL_UP, MonitorMouseAction.SCROLL_DOWN -> if (y in 10 until bodyBottom) {
+            MonitorMouseAction.SCROLL_UP, MonitorMouseAction.SCROLL_DOWN -> if (y in 9 until bodyBottom) {
                 val step = if (action.actionType == MonitorMouseAction.SCROLL_UP) -1 else 1
                 selected = (selected + step).coerceIn(0, (rows(snapshot).size - 1).coerceAtLeast(0))
             }

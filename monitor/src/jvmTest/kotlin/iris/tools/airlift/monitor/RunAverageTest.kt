@@ -22,7 +22,7 @@ class RunAverageTest {
             screen.startScreen()
             val monitor = AirliftMonitor(source)
             val model = MonitorModel()
-            fun summary() = (0 until 120).map { screen.getBackCharacter(it, 5).character }.joinToString("")
+            fun summary() = (0 until 120).map { screen.getBackCharacter(it, 4).character }.joinToString("")
             monitor.render(screen, running, model)
             assertContains(summary(), "ETA")
             val finished = running.copy(tasks = listOf(task.copy(status = TaskStatus.SUCCEEDED)), finishedAtMillis = started + 2000)

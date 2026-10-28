@@ -28,7 +28,7 @@ class MonitorTerminalTest {
         val events = ArrayDeque(listOf(
             MonitorEvent.Key(MonitorKey.Character, 'p'),
             MonitorEvent.Key(MonitorKey.Character, '+'),
-            MonitorEvent.Mouse(MonitorMouseAction.CLICK_DOWN, 1, 14, 8),
+            MonitorEvent.Mouse(MonitorMouseAction.CLICK_DOWN, 1, 14, 7),
             MonitorEvent.Key(MonitorKey.Character, 'q'),
         ))
         var started = false

@@ -37,13 +37,13 @@ class PendingReductionTest {
             val model = MonitorModel()
             val monitor = AirliftMonitor(source)
             monitor.render(screen, value, model)
+            assertEquals(TextColor.RGB(135, 88, 44), screen.getBackCharacter(0, 11).backgroundColor)
             assertEquals(TextColor.RGB(135, 88, 44), screen.getBackCharacter(0, 12).backgroundColor)
-            assertEquals(TextColor.RGB(135, 88, 44), screen.getBackCharacter(0, 13).backgroundColor)
             model.handle('+', source)
             model.handle('+', source)
             monitor.render(screen, value, model)
+            assertEquals(TextColor.ANSI.BLACK, screen.getBackCharacter(0, 11).backgroundColor)
             assertEquals(TextColor.ANSI.BLACK, screen.getBackCharacter(0, 12).backgroundColor)
-            assertEquals(TextColor.ANSI.BLACK, screen.getBackCharacter(0, 13).backgroundColor)
         }
     }
 }

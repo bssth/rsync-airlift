@@ -22,7 +22,7 @@ class BatchDetailsTest {
             screen.startScreen()
             val monitor = AirliftMonitor(source)
             val model = MonitorModel()
-            fun details() = (0 until 140).joinToString("") { screen.getBackCharacter(it, 19).characterString }
+            fun details() = (0 until 140).joinToString("") { screen.getBackCharacter(it, 20).characterString }
             monitor.render(screen, snapshot, model)
             assertContains(details(), "file 53/222")
             monitor.render(screen, snapshot.copy(tasks = listOf(state.copy(status = TaskStatus.SUCCEEDED))), model)

@@ -11,7 +11,7 @@ class MonitorRenderer(private val source: MonitorSource, private val title: Stri
     fun render(size: MonitorSize, snapshot: AirliftSnapshot, model: MonitorModel): MonitorFrame {
         val screen = MonitorFrame(size)
         model.mouseRows.clear()
-        model.bodyBottom = 10
+        model.bodyBottom = 9
         val width = size.columns
         val height = size.rows
         val graphics = screen
@@ -79,18 +79,18 @@ class MonitorRenderer(private val source: MonitorSource, private val title: Stri
         val workerCount = if (finished) snapshot.targetWorkers else snapshot.workers.count {
             it.status in setOf(WorkerStatus.CONNECTING, WorkerStatus.IDLE, WorkerStatus.TRANSFERRING)
         }
-        line(3, "Workers $workerCount | Elapsed ${duration(elapsed)}")
-        line(4, "Done ${snapshot.completed}/${snapshot.tasks.sumOf { it.task.fileCount }} | Failed ${snapshot.failed}")
-        line(5, "Processed ${bytes(processed)} / ${if (allKnown) bytes(total) else "unknown total"} | ${displayRate?.let { bytes(it.toLong()) + "/s" } ?: "--/s"}$etaText")
+        val failedText = if (snapshot.failed > 0) " | Failed ${snapshot.failed}" else ""
+        line(3, "Workers $workerCount | Done ${snapshot.completed}/${snapshot.tasks.sumOf { it.task.fileCount }}$failedText | Elapsed ${duration(elapsed)}")
+        line(4, "Processed ${bytes(processed)} / ${if (allKnown) bytes(total) else "unknown total"} | ${displayRate?.let { bytes(it.toLong()) + "/s" } ?: "--/s"}$etaText")
         val breakdown = OverallBreakdown.from(snapshot)
         val barWidth = (width - 10).coerceAtMost(100)
-        segments(0, 6, listOf(RowSegment("[")) + breakdown.segments(barWidth) +
+        segments(0, 5, listOf(RowSegment("[")) + breakdown.segments(barWidth) +
             RowSegment("] ${fixedOne(ratio * 100) + "%"}"), width)
-        line(7, breakdown.summary(processed))
-        line(8, "1 Workers | 2 Queue | 3 Errors | Tab switch | ${model.view}", MonitorColor.ANSI.CYAN)
-        val detailHeight = if (model.details && height >= 22) 5 else 0
-        val rowCount = (height - 12 - detailHeight).coerceAtLeast(1)
-        model.bodyBottom = 10 + rowCount
+        line(6, breakdown.summary(processed))
+        line(7, "1: Workers | 2: Queue | 3: Errors | Tab: switch | ${model.view}", MonitorColor.ANSI.CYAN)
+        val detailHeight = if (model.details && height >= 22) 4 else 0
+        val rowCount = (height - 11 - detailHeight).coerceAtLeast(1)
+        model.bodyBottom = 9 + rowCount
         val grid = WorkerGrid(width, model.visibleWorkers(snapshot).size, rowCount)
         val rows = model.rows(snapshot, grid.cellWidth)
         model.selected = model.selected.coerceIn(0, (rows.size - 1).coerceAtLeast(0))
@@ -100,21 +100,21 @@ class MonitorRenderer(private val source: MonitorSource, private val title: Stri
         if (workersView) {
             val layout = WorkerLineLayout(grid.cellWidth)
             for (column in 0 until grid.columns) {
-                segments(column * (grid.cellWidth + WorkerGrid.GAP), 9,
+                segments(column * (grid.cellWidth + WorkerGrid.GAP), 8,
                     listOf(RowSegment(layout.header(), MonitorColor.ANSI.CYAN)), grid.cellWidth)
             }
         }
         val offset = if (workersView) model.selected / grid.capacity * grid.capacity else (model.selected - rowCount + 1).coerceAtLeast(0)
-        if (rows.isEmpty()) line(10, "No entries.")
+        if (rows.isEmpty()) line(9, "No entries.")
         if (workersView) {
             rows.drop(offset).take(grid.capacity).forEachIndexed { index, row ->
                 val (x, y) = grid.position(index)
-                segments(x, 10 + y, row.segments, grid.cellWidth, offset + index == model.selected, row.pendingReduction)
-                model.mouseRows.add(MonitorModel.MouseRow(x, 10 + y, grid.cellWidth, offset + index))
+                segments(x, 9 + y, row.segments, grid.cellWidth, offset + index == model.selected, row.pendingReduction)
+                model.mouseRows.add(MonitorModel.MouseRow(x, 9 + y, grid.cellWidth, offset + index))
             }
         } else {
         rows.drop(offset).take(rowCount).forEachIndexed { index, row ->
-            val y = 10 + index
+            val y = 9 + index
             val selected = offset + index == model.selected
             line(y, row.text, if (row.error != null) MonitorColor.ANSI.RED else MonitorColor.ANSI.WHITE, selected)
             model.mouseRows.add(MonitorModel.MouseRow(0, y, width, offset + index))
@@ -123,14 +123,12 @@ class MonitorRenderer(private val source: MonitorSource, private val title: Stri
         if (detailHeight > 0) {
             val row = rows.getOrNull(model.selected)
             val task = row?.task
-            val y = height - 7
+            val y = height - 6
             val workerId = row?.workerId ?: snapshot.workers.firstOrNull { task != null && it.taskId == task.task.id }?.id
             val worker = snapshot.workers.firstOrNull { it.id == workerId }
             line(y, "DETAILS WORKER${workerId?.let { " " + it.toString().padStart(3, '0') } ?: ""}", MonitorColor.ANSI.CYAN)
             val currentName = task?.progress?.currentFile ?: if ((task?.task?.fileCount ?: 1) > 1) "awaiting rsync filename" else task?.task?.path ?: "--"
             line(y + 1, "File: $currentName")
-            val progress = task?.progress
-            val stats = "matched ${bytes(progress?.matchedBytes)} | new ${bytes(progress?.literalBytes)}"
             val batchInfo = if ((task?.task?.fileCount ?: 1) > 1) {
                 val index = task!!.task.files.indexOf(task.progress?.currentFile).takeIf { it >= 0 }?.plus(1)
                 val position = if (task.status == TaskStatus.SUCCEEDED) "Processed ${task.task.fileCount}/${task.task.fileCount}"
@@ -138,12 +136,11 @@ class MonitorRenderer(private val source: MonitorSource, private val title: Stri
                 " | Files ${task.task.fileCount} | $position | sent ${task.progress?.transferredFiles ?: 0}"
             } else ""
             val displayedStatus = if (MonitorModel.finishing(task)) "FINISHING" else task?.status ?: worker?.status ?: "--"
-            val statusInfo = if (batchInfo.isNotEmpty()) "$displayedStatus$batchInfo | Size ${bytes(task?.task?.size)}"
-                else "$displayedStatus | Size ${bytes(task?.task?.size)} | attempt ${task?.attempts ?: 0}"
+            val statusInfo = "$displayedStatus$batchInfo | Size ${bytes(task?.task?.size)}" +
+                " | Speed ${task?.let { MonitorModel.rate(it) } ?: "--/s"} | attempt ${task?.attempts ?: 0}"
             line(y + 2, statusInfo)
-            line(y + 3, "$stats | Speed ${task?.let { MonitorModel.rate(it) } ?: "--/s"}")
             val error = task?.error ?: row?.error
-            line(y + 4, error?.let { "Error: $it" } ?: "", MonitorColor.ANSI.RED)
+            line(y + 3, error?.let { "Error: $it" } ?: "", MonitorColor.ANSI.RED)
         }
         segments(0, height - 2, if (model.message.isNotEmpty()) listOf(RowSegment(model.message, MonitorColor.ANSI.YELLOW)) else listOf(
             RowSegment("Overall: "), RowSegment("matched ", MonitorColor.ANSI.CYAN), RowSegment("new/processed ", MonitorColor.ANSI.GREEN),
