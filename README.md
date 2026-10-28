@@ -283,8 +283,10 @@ modes do not ask for transfer confirmation.
 
 | Argument | Behavior/default |
 | --- | --- |
-| `--workers N` | Initial target concurrency; 16 for real transfers, 4 for demo |
+| `--workers N` | Initial target concurrency, 1–256; 16 for real transfers, 4 for demo |
 | `--rsync "OPTIONS"` | Copy options passed to rsync; no archive/partial/bandwidth policy is injected |
+| `--ssh "OPTIONS"` | Extra OpenSSH client options, such as a cipher; see [Rsync options](#rsync-options) |
+| `--attempts N` | rsync attempts per job, 1–10; 1 |
 | `--batch-min-size SIZE` | Minimum accumulated job size; `5MiB` |
 | `--files FILE` | UTF-8 relative file list; one path per line |
 | `--null` | Read the list as NUL-separated paths instead |
@@ -325,9 +327,20 @@ fingerprint prompt. Changed host keys remain an error; Airlift does not silently
 replace them. For a headless run, establish the trusted host key beforehand.
 
 Each worker owns an independent SSH ControlMaster and reuses it across jobs.
-Initial connection failures appear in the worker/error views. Failed connections
-are not automatically reconnected; rsync attempts use `AirliftConfig.maxAttempts`
-(default 1). The CLI does not expose a retry-count option.
+At most 8 workers authenticate at the same time (`AirliftConfig.connectConcurrency`),
+which keeps startup below OpenSSH's default `MaxStartups 10`, so sshd does not
+drop the extra logins.
+
+A worker retries a failed connection with backoff (1 s, 2 s, ...) and gives up
+after 3 consecutive failures (`AirliftConfig.connectAttempts`). After a failed rsync
+attempt the worker asks its ControlMaster whether it is still alive (`ssh -O check`).
+If the connection is gone, for example after a network outage longer than the
+90 s keepalive window, the job returns to the front of the queue instead of being
+marked failed, and the worker reconnects. A completed job resets the failure count.
+Without this check, a worker with a dead master would fail every remaining job
+within milliseconds. Connection problems appear in the worker and error views.
+
+rsync attempts per job use `AirliftConfig.maxAttempts` (CLI `--attempts`, default 1).
 
 ## File selection and destination paths
 
@@ -411,6 +424,12 @@ failed even if some were copied. A retry reruns the whole batch; rsync reconcile
 the destination according to the supplied options. Pause and concurrency reduction
 take effect between jobs, without interrupting active transfers.
 
+rsync exit code 24 ("some files vanished before they could be transferred") completes
+the job with a warning, shown in the error view, instead of failing it. When a live
+dataset is pre-copied, temporary files routinely disappear between discovery and
+transfer, and one vanished file would otherwise mark a whole batch as failed. Other
+partial-transfer codes, such as 23, still fail the job.
+
 ## Rsync options
 
 ```sh
@@ -425,9 +444,31 @@ a shell. No variable, command-substitution or wildcard expansion takes place in
 `--partial`, `--partial-dir`, `--inplace`, or bandwidth limits.
 
 Airlift appends its relative-path, file-list, SSH transport and telemetry arguments,
-including a filename output format. `-e`/`--rsh`, `--files-from` and an option
-terminator inside `--rsync` are reserved. Use Airlift's `--port`, `--identity`, and
-`--files` for those purposes. Other options are forwarded, not comprehensively validated.
+including a filename output format and `--no-human-readable`. With the latter, `-h` in
+`--rsync` cannot hide progress or `--stats` byte counts from the monitor; it only
+changes rsync's own number formatting, which Airlift does not display.
+
+Some options are reserved inside `--rsync` and rejected:
+- `-e`/`--rsh`, including `-e` inside a short-option cluster such as `-ave ssh`;
+- `--files-from`;
+- options that would read Airlift's file list from standard input: `--exclude-from=-`,
+  `--include-from=-`, and `--filter`/`-f` merge rules that read `-`;
+- an option terminator `--`, and any argument that is not an option or an option's value,
+  since it would become an extra rsync source.
+
+Use Airlift's `--port`, `--identity`, `--ssh` and `--files` for those purposes. Write
+option values as `--option=value` when in doubt. Other options are forwarded, not
+comprehensively validated.
+
+Extra OpenSSH client options go in `--ssh`, for example a faster cipher on a
+CPU-bound link: `--ssh "-c aes128-gcm@openssh.com -o Compression=no"`. They apply to
+every SSH command Airlift runs, after Airlift's own options; OpenSSH keeps the first
+value of an option, so Airlift's transport settings always take precedence. Options
+that would break the worker ControlMasters are rejected: `-M`, `-S`, `-O`, `-N`, `-f`,
+`-n`, `-T`, `-t`, `-W`, `-w`, forwardings (`-L`, `-R`, `-D`), `-G`, `-Q`, `-V`, `-s`,
+`-p` and `-i` (use `--port` and `--identity`), as well as `-o ControlMaster`,
+`ControlPath`, `ControlPersist`, `RemoteCommand`, `RequestTTY`, `SessionType`,
+`StdinNull`, `ForkAfterAuthentication` and forwarding or tunnel options.
 
 `--bwlimit` is **per rsync process**, not global. `-H` can preserve hard links
 within a job, but not across separate jobs. Symlink copying follows the options
@@ -619,8 +660,11 @@ Owners always call `close()` to terminate/reap the child and release its pipes.
 Cancelling pipe I/O aborts the child so a blocked OS read/write can be released.
 Environment values are excluded from specification descriptions.
 
-`JvmProcessLauncher` implements startup and blocking pipe I/O on `Dispatchers.IO`
-and waits through Java's `Process.onExit()`. Its cleanup is idempotent, including
+`JvmProcessLauncher` implements startup and blocking pipe I/O on its own elastic view of
+`Dispatchers.IO` and waits through Java's `Process.onExit()`. A blocked pipe read holds a
+thread until the child writes, so with many workers the 64-thread `Dispatchers.IO`
+limit could park every thread in a read while the writes feeding those children
+waited in the queue; the separate pool removes that deadlock. Its cleanup is idempotent, including
 concurrent close calls. The common SSH session streams input and output
 concurrently to avoid deadlocks on large file lists; it parses CR/LF records even
 when UTF-8 characters span input chunks. It does not create threads or use Java
@@ -692,7 +736,12 @@ runBlocking {
 
 Direction defaults to DOWNLOAD; UPLOAD reverses the configured roots. `path` and
 `files` are relative POSIX paths without traversal; batch `size` is the total
-source size. An empty `files` list means one file at `path`. Task IDs must be
+source size. An empty `files` list means one file at `path`; `fileTotal` defaults to
+the list size and lets a monitor copy of a job carry the count without the list.
+A job that rsync finishes with code 24 succeeds with `TaskState.warning` set. A custom
+`TransferSession` can implement `isConnected()` so that a job failed by a dropped
+connection is requeued and the worker reconnects; the default reports a live
+connection. Task IDs must be
 unique (default: `path`); callers must avoid overlapping destinations, including
 symlink aliases. `sourceRoot` can override a job's source root. `entries` can
 provide a shortened file/directory list while `files` retains the accounting list;
