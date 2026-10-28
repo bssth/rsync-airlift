@@ -98,18 +98,21 @@ internal suspend fun runMonitorService(
     try {
         server = platform.serve(source, endpoint)
         shutdown = platform.onShutdown {
-            try {
-                dispatcher.close()
-                server.close()
-            } finally { stop.complete(Unit) }
+            // Each step runs even if an earlier one fails, so the endpoint is removed and the service ends.
+            try { dispatcher.close() }
+            finally { try { server.close() } finally { stop.complete(Unit) } }
         }
         dispatcher.start()
         println("${if (demo) "DEMO (simulated data). " else ""}Monitor connection: $endpoint")
         println("Attach: rsync-airlift-monitor --attach \"$endpoint\"")
         println("Ctrl+C stops dispatcher. Q detaches while running; after completion Q exits an interactive run.")
         if (interactive) {
-            runPanel()
-            if (dispatcher.snapshot().finishedAtMillis != null) return
+            // The panel is only a view: a terminal failure must not cancel the transfers it shows.
+            val panelFailure = try { runPanel(); null }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) { error }
+            if (panelFailure != null) println("Monitor panel stopped: ${panelFailure.message ?: panelFailure::class.simpleName}")
+            else if (dispatcher.snapshot().finishedAtMillis != null) return
             println("Monitor detached. Dispatcher remains available at $endpoint")
         }
         stop.await()
