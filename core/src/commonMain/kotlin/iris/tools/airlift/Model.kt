@@ -17,13 +17,30 @@ data class AirliftConfig(
     val sshExecutable: String = "ssh",
     val rsyncExecutable: String = "rsync",
     val rsyncOptions: String? = null,
+    /** Extra OpenSSH client options (for example a cipher); Airlift's own transport options take precedence. */
+    val sshOptions: String? = null,
+    /** SSH connection attempts per worker, including reconnects after a lost ControlMaster. */
+    val connectAttempts: Int = 3,
+    /** Workers that may run SSH authentication at the same time; keeps below sshd's default MaxStartups of 10. */
+    val connectConcurrency: Int = 8,
 ) {
     init {
         require(host.isNotBlank() && !host.startsWith('-') && host.none { it.isWhitespace() || it.isISOControl() })
         require(remoteRoot.startsWith('/') && remoteRoot.none { it.isISOControl() })
-        require(workers > 0 && maxAttempts > 0 && retryDelayMillis >= 0 && connectTimeoutSeconds > 0)
+        require(workers in 1..MAX_WORKERS) { "Workers must be between 1 and $MAX_WORKERS" }
+        require(maxAttempts > 0 && retryDelayMillis >= 0 && connectTimeoutSeconds > 0)
+        require(connectAttempts > 0 && connectConcurrency > 0)
         require(port in 1..65535)
         rsyncOptions?.let(RsyncArguments::parse)
+        sshOptions?.let(SshOptions::parse)
+    }
+
+    /** Validated extra OpenSSH arguments; every SSH invocation for this transfer appends them. */
+    val sshArguments: List<String> get() = sshOptions?.let(SshOptions::parse).orEmpty()
+
+    companion object {
+        /** Upper bound for the worker pool; each worker owns an SSH connection and rsync processes. */
+        const val MAX_WORKERS = 256
     }
 }
 
